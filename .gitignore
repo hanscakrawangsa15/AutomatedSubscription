@@ -1,0 +1,8 @@
+node_modules
+artifacts
+cache
+.env
+server/subscribers.json
+coverage
+coverage.json
+dist
