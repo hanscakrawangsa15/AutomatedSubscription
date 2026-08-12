@@ -6,3 +6,6 @@ server/subscribers.json
 coverage
 coverage.json
 dist
+tron/build
+.audit-venv
+.mythril-venv

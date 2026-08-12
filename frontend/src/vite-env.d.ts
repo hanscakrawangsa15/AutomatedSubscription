@@ -15,6 +15,15 @@ interface ImportMetaEnv {
   readonly VITE_BASE_MAINNET_RPC_URL?: string;
   readonly VITE_ETH_MAINNET_RPC_URL?: string;
   readonly VITE_BSC_MAINNET_RPC_URL?: string;
+  // TRON — not chainId-keyed like the EVM vars below, since Tron networks
+  // aren't identified that way. See lib/tronContracts.ts.
+  /** "testnet" (default) or "mainnet" — independent from VITE_NETWORK_MODE (EVM), TRON has its own toggle. */
+  readonly VITE_TRON_NETWORK_MODE?: "testnet" | "mainnet";
+  readonly VITE_TRON_FULL_HOST?: string;
+  readonly VITE_TRON_NILE_USDC_ADDRESS?: string;
+  readonly VITE_TRON_NILE_MANAGER_ADDRESS?: string;
+  readonly VITE_TRON_MAINNET_USDT_ADDRESS?: string;
+  readonly VITE_TRON_MAINNET_MANAGER_ADDRESS?: string;
   // Per-chain contract addresses: VITE_USDC_ADDRESS_<chainId> and
   // VITE_SUBSCRIPTION_MANAGER_ADDRESS_<chainId>. Accessed dynamically in
   // lib/contracts.ts, so they're covered by this index signature rather

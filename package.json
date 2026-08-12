@@ -20,6 +20,8 @@
     "keeper:base": "hardhat run scripts/keeper.js --network base",
     "keeper:mainnet": "hardhat run scripts/keeper.js --network mainnet",
     "keeper:bsc": "hardhat run scripts/keeper.js --network bsc",
+    "deploy:tron-nile": "cd tron && npm run migrate:nile",
+    "keeper:tron-nile": "node scripts/keeper.tron.js",
     "server": "node server/index.js"
   },
   "keywords": [],
@@ -33,5 +35,8 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "hardhat": "^2.29.0"
+  },
+  "dependencies": {
+    "tronweb": "^6.4.0"
   }
 }

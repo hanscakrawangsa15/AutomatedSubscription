@@ -1,0 +1,6 @@
+which: no solc in (/home/hans/miniforge3/bin:/home/hans/miniforge3/condabin:/home/hans/.local/bin:/home/hans/Dokumen/Semester 6/Bersatu Bantu/BersatuBantu/flutter/bin:/home/hans/flutter/bin:/home/hans/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/home/hans/.config/.foundry/bin:/home/hans/.local/share/flatpak/exports/bin:/var/lib/flatpak/exports/bin:/usr/bin/site_perl:/usr/bin/vendor_perl:/usr/bin/core_perl:/home/hans/.config/.foundry/bin)
+/home/hans/Xenorize/AutomatedSubscription/.mythril-venv/lib/python3.13/site-packages/eth/__init__.py:1: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+# Analysis results for None
+The analysis was completed successfully. No issues were detected.
+

@@ -29,12 +29,19 @@ export function WrongNetworkBanner({ currentChainId }: WrongNetworkBannerProps) 
 
   return (
     <div className="banner banner--warning">
-      Your wallet is on {getChainName(currentChainId)} (chain {currentChainId.toString()}), which isn't set
-      up yet. Switch to a supported network to continue.
+      {availableChains.length === 0 ? (
+        <>
+          Your wallet is on {getChainName(currentChainId)} (chain {currentChainId.toString()}), but
+          SubscriptionManager isn't deployed to any network in this build yet — there's nothing to switch
+          to right now.
+        </>
+      ) : (
+        <>
+          Your wallet is on {getChainName(currentChainId)} (chain {currentChainId.toString()}), which isn't
+          set up yet. Switch to a supported network to continue.
+        </>
+      )}
       <div className="row">
-        {availableChains.length === 0 && (
-          <span className="muted">No networks are configured with contract addresses yet.</span>
-        )}
         {availableChains.map((chain) => (
           <button key={chain.id} onClick={() => handleSwitch(chain)} disabled={switchingTo !== null}>
             {switchingTo === String(chain.id) ? "Switching..." : `Switch to ${chain.name}`}

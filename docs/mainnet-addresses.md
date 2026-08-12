@@ -58,6 +58,30 @@ auditor doesn't assume all three chains use the same token.
 - Found: 2026-08-07, cross-referenced via BscScan listing + CoinGecko
 - Verified by: _(pending — human must confirm on BscScan before deploy)_
 
+## TRON Mainnet
+
+**Not an EVM chain — no numeric chainId, no `SubscriptionManager` deployment yet.**
+This entry is plumbing-only (frontend can point at the real USDT contract once
+`SubscriptionManager` is actually deployed to TRON Mainnet — see
+`VITE_TRON_MAINNET_MANAGER_ADDRESS` in `frontend/.env.example`, intentionally
+left blank). That deployment needs a security audit specific to the TVM build
+first, same bar as the other mainnet chains — see `tron/README.md` and the
+mainnet-readiness plan.
+
+- Token: Tether USD (USDT), TRC20 — the canonical/dominant USDT contract on
+  TRON, used by essentially every wallet and exchange.
+- Address: `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`
+- Decimals: 6
+- Explorer: https://tronscan.org/#/token20/TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
+- Found: 2026-08-12, cross-referenced via web search (Bitget, Datawallet,
+  Tether's own supported-protocols page, Bitquery) — **and live-verified**
+  via a direct on-chain `name()`/`symbol()`/`decimals()` read against
+  `api.trongrid.io`, returning `{ name: "Tether USD", symbol: "USDT",
+  decimals: 6 }`, matching expectations exactly.
+- Verified by: Claude (live on-chain read, 2026-08-12) — a human should still
+  glance at the Tronscan link above before this is ever used in a real
+  mainnet deploy, per this project's standing rule.
+
 ## Next steps before these go into `.env`
 
 1. Open each explorer link above in a browser, confirm verified-source,
