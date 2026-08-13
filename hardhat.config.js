@@ -70,4 +70,13 @@ module.exports = {
       accounts: accountsFor("BSC_DEPLOYER_PRIVATE_KEY"),
     },
   },
+  // For `npx hardhat verify --network <name> <address>` — publishes source
+  // so anyone can confirm the deployed bytecode matches this repo, rather
+  // than trusting an opaque blob. Etherscan's V2 API unifies Etherscan/
+  // BaseScan/BscScan/etc. under one API key (the old per-network apiKey
+  // object is deprecated) — hence the single ETHERSCAN_API_KEY here even
+  // though it verifies on all three explorer families.
+  etherscan: {
+    apiKey: process.env.ETHERSCAN_API_KEY || "",
+  },
 };

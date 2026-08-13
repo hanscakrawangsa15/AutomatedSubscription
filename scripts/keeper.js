@@ -52,11 +52,15 @@ async function queryLogsChunked(contract, filter, fromBlock, toBlock) {
       from = to + 1;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (/block range|exceed/i.test(message) && chunkSize > 500) {
-        chunkSize = Math.floor(chunkSize / 4);
-        continue;
-      }
-      throw err;
+      if (!/block range|exceed/i.test(message) || chunkSize <= 1) throw err;
+      // Some free-tier RPC plans (observed: Alchemy free tier) cap
+      // eth_getLogs far below the usual 10k-50k range — as low as 10
+      // blocks — and say so directly in the error ("up to a N block
+      // range"). Jump straight to that exact size instead of blindly
+      // quartering down to it over several failed round-trips.
+      const stated = message.match(/up to an? (\d+) block/i);
+      chunkSize = stated ? Math.max(1, Number(stated[1])) : Math.max(1, Math.floor(chunkSize / 4));
+      continue;
     }
   }
   return results;

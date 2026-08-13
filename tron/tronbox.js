@@ -22,6 +22,17 @@ module.exports = {
       fullHost: "https://nile.trongrid.io",
       network_id: "3",
     },
+    // Mainnet — REAL FUNDS. No public-RPC fallback distinction needed here
+    // (api.trongrid.io is TronGrid's own mainnet endpoint, same pattern as
+    // the frontend's default), but the deployer key must be explicitly set
+    // — no shared/fallback key, unlike some of the testnet scripts.
+    mainnet: {
+      privateKey: process.env.TRON_MAINNET_DEPLOYER_PRIVATE_KEY,
+      userFeePercentage: 100,
+      feeLimit: 1000 * 1e6, // 1000 TRX
+      fullHost: "https://api.trongrid.io",
+      network_id: "1",
+    },
   },
 
   compilers: {

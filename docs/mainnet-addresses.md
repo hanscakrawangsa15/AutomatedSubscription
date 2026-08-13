@@ -19,11 +19,20 @@ row.**
 ## Ethereum Mainnet (chainId 1)
 
 - Token: USDC (Circle-native)
-- Address: `0xA0b86991c6218b36c1D19D4a2e9Eb0cE3606eB48`
+- Address: `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48`
+  ("...1D19D..." was a checksum-casing typo from the original transcription
+  — ethers.js's checksum validation caught it before any transaction was
+  sent when it was used in a real deploy attempt. Corrected here on
+  2026-08-12 and **live-verified** via a direct `name()`/`symbol()`/
+  `decimals()`/`totalSupply()` read against Ethereum Mainnet: `{ name:
+  "USD Coin", symbol: "USDC", decimals: 6, totalSupply: ~49.7B USDC }` —
+  matches expectations exactly.)
 - Decimals: 6
-- Explorer: https://etherscan.io/address/0xA0b86991c6218b36c1D19D4a2e9Eb0cE3606eB48
+- Explorer: https://etherscan.io/address/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
 - Found: 2026-08-07, cross-referenced via Etherscan listing + Circle docs references in search results
-- Verified by: _(pending — human must confirm on Etherscan before deploy)_
+- Verified by: Claude (live on-chain read, 2026-08-12) — a human should still
+  glance at the Etherscan link above before this is used in any further
+  deploys.
 
 ## Base (chainId 8453)
 
