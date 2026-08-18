@@ -129,9 +129,9 @@ Same pattern again (second `SubscriptionManager` instance, suffix
 
 ## BNB Chain (chainId 56)
 
-**Decision (2026-08-07): use USDT here, not USDC.** BNB Chain has no
-Circle-native USDC — the "USDC" token there (`0x8AC76a51...`) is
-Binance-Peg, backed by Binance-controlled reserves rather than Circle, an
+**Decision (2026-08-07): use USDT here, not USDC as the primary token.**
+BNB Chain has no Circle-native USDC — the "USDC" token there (`0x8AC76a51...`)
+is Binance-Peg, backed by Binance-controlled reserves rather than Circle, an
 explicitly different trust/custody model than the Ethereum/Base deployments.
 After flagging this tradeoff, the call was made to use Binance-Peg USDT
 instead, which is the dominant stablecoin on BSC by liquidity. **This means
@@ -142,6 +142,13 @@ generic/per-chain rather than renamed, since `deploy.js`/`keeper.js`/
 literally USDC-typed). State this explicitly in the audit spec doc so the
 auditor doesn't assume all three chains use the same token.
 
+**Update (2026-08-18): Binance-Peg USDC added anyway, as a third payment
+option (suffix `_USDC`).** The custody caveat above still applies — this is
+NOT Circle-native USDC and carries Binance's custody/trust model, same as
+the note above. Flagged explicitly again before deploying; the call was
+made to add it as an additional choice alongside USDT/WBNB, not to replace
+USDT as the primary/default token.
+
 - Token: Binance-Peg BSC-USD (USDT, BEP-20)
 - Address: `0x55d398326f99059fF775485246999027B3197955`
 - Decimals: 18 (not 6 — `SubscriptionManager` reads `decimals()` dynamically
@@ -150,6 +157,31 @@ auditor doesn't assume all three chains use the same token.
 - Explorer: https://bscscan.com/token/0x55d398326f99059fF775485246999027B3197955
 - Found: 2026-08-07, cross-referenced via BscScan listing + CoinGecko
 - Verified by: _(pending — human must confirm on BscScan before deploy)_
+
+## BNB Chain — USDC (Binance-Peg, third payment method)
+
+**Not Circle-native — see the custody caveat above.** Second
+`SubscriptionManager` instance on chainId 56 (env var suffix `_USDC`).
+Unlike WETH/WBNB, this token IS pegged 1:1 to USD, so plans are priced the
+same cents-based way as the primary USDT deployment (no reference-price
+drift issue).
+
+- Token: Binance-Peg USD Coin (USDC), BEP-20
+- Address: `0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d`
+- Decimals: 18 (not 6 — same dynamic-decimals handling as the other BSC
+  deployments)
+- Explorer: https://bscscan.com/token/0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d
+- Found: 2026-08-18, cross-referenced via BscScan listing + CoinGecko —
+  **live-verified** via a direct `name()`/`symbol()`/`decimals()`/
+  `totalSupply()` read: `{ name: "USD Coin", symbol: "USDC", decimals: 18,
+  totalSupply: ~1.589B USDC }` — matches expectations exactly.
+- Verified by: Claude (live on-chain read, 2026-08-18) — a human should
+  still glance at the BscScan link above before this is used in any
+  further deploy.
+- Manager: `0x380b7B1091869AF3dcB6149B847eF7402871E2b4`, deploy block
+  116623277, ownership transferred to the Safe multisig
+  (`0xccD26Af8599109a582179F7099fa6980a2c9A5F5`) same as every other EVM
+  mainnet manager.
 
 ## Next steps before these go into `.env`
 

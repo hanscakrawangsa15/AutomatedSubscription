@@ -1,7 +1,7 @@
-// Shared MySQL `subscribers` table access for the EVM/Solana keeper
-// scripts — both need only a read (renewal-email lookup by wallet+chain),
-// never a write; the row itself is written once by server/index.js when a
-// subscribe() transaction confirms (see docs on that endpoint).
+// Shared MySQL `subscribers` table access for the keeper script — needs
+// only a read (renewal-email lookup by wallet+chain), never a write; the
+// row itself is written once by server/index.js when a subscribe()
+// transaction confirms (see docs on that endpoint).
 const mysql = require("mysql2/promise");
 
 let pool;

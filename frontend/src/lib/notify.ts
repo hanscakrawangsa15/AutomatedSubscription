@@ -5,8 +5,7 @@ export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export type SubscriptionReport = {
   address: string;
   chainName: string;
-  /** null for chains with no numeric chain id (Solana) */
-  chainId: number | null;
+  chainId: number;
   email?: string;
   trafficSource?: string | null;
   planId: number;

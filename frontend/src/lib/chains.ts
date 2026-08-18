@@ -27,12 +27,18 @@ function mainnetRpc(envVar: keyof ImportMetaEnv, label: string): string {
   );
 }
 
+// Base still has real deployed managers (USDC/WETH) from an earlier phase,
+// kept live and untouched — but the app moved to a USDT-only, ERC-20
+// (Ethereum) / BEP-20 (BNB Chain) payment model, so Base is no longer
+// offered as a connectable network. BASE_MAINNET stays exported (chain
+// utilities below still recognize chain 8453) in case a wallet somehow
+// ends up there, just excluded from SUPPORTED_CHAINS.
 export const BASE_MAINNET = withCaip(base, mainnetRpc("VITE_BASE_MAINNET_RPC_URL", "Base"));
 export const ETH_MAINNET = withCaip(mainnet, mainnetRpc("VITE_ETH_MAINNET_RPC_URL", "Ethereum Mainnet"));
 export const BSC_MAINNET = withCaip(bsc, mainnetRpc("VITE_BSC_MAINNET_RPC_URL", "BNB Chain"));
 
 /** Every network the app is willing to let a wallet connect/switch to. */
-export const SUPPORTED_CHAINS: [AppKitNetwork, ...AppKitNetwork[]] = [BASE_MAINNET, ETH_MAINNET, BSC_MAINNET];
+export const SUPPORTED_CHAINS: [AppKitNetwork, ...AppKitNetwork[]] = [ETH_MAINNET, BSC_MAINNET];
 
 /** Sensible default network for AppKit/read-only UI before a wallet connects. */
 export const DEFAULT_CHAIN: AppKitNetwork = SUPPORTED_CHAINS[0];

@@ -5,7 +5,7 @@ import { formatTxError } from "../lib/errors";
 import { formatDuration, type PlanInfo } from "../lib/plans";
 import { EMAIL_RE, reportSubscription } from "../lib/notify";
 import { getChainSlug } from "../lib/chains";
-import { getTrafficSource } from "../lib/trafficSource";
+import { getTrafficSource, getEmailFromUrl } from "../lib/trafficSource";
 
 const PLAN_LABELS: Record<string, string> = { monthly: "Monthly", yearly: "Yearly", test: "Test" };
 
@@ -44,8 +44,14 @@ export function ConfirmSubscription({
   // way, and so it costs nothing extra for a token that doesn't need it.
   const [needsReset, setNeedsReset] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [email, setEmail] = useState("");
+  // Pre-filled from ?email= when the main Xenorize site links a
+  // already-logged-in user into this checkout (e.g.
+  // https://cpay.xenorize.com/?email=user@example.com&source=stg) — still
+  // editable, and still required, since not every entry point supplies it.
+  const [email, setEmail] = useState(() => getEmailFromUrl() ?? "");
+  const [emailTouched, setEmailTouched] = useState(false);
   const [notifyStatus, setNotifyStatus] = useState<"idle" | "sent" | "failed">("idle");
+  const emailValid = EMAIL_RE.test(email);
 
   const managerAddress = getChainAddresses(chainId, plan.tokenSuffix)?.manager;
 
@@ -76,7 +82,7 @@ export function ConfirmSubscription({
   }, [signer, account, chainId, managerAddress, plan.priceRaw, plan.tokenSuffix]);
 
   const confirmAndSubscribe = async () => {
-    if (!managerAddress) return;
+    if (!managerAddress || !emailValid) return;
     setErrorMsg(null);
     try {
       if (needsApproval) {
@@ -99,13 +105,13 @@ export function ConfirmSubscription({
         address: account,
         chainName: getChainSlug(chainId),
         chainId: Number(chainId),
-        email: email && EMAIL_RE.test(email) ? email : undefined,
+        email,
         trafficSource: getTrafficSource(),
         planId: plan.id,
         planLabel: PLAN_LABELS[plan.kind] ?? plan.kind,
         txHash: tx.hash,
       });
-      if (email && EMAIL_RE.test(email)) setNotifyStatus(ok ? "sent" : "failed");
+      setNotifyStatus(ok ? "sent" : "failed");
 
       onSubscribed();
     } catch (err) {
@@ -148,7 +154,7 @@ export function ConfirmSubscription({
       </div>
 
       <label className="field-label" htmlFor="notify-email">
-        Email for renewal receipts (optional)
+        Email for renewal receipts (required)
       </label>
       <input
         id="notify-email"
@@ -156,8 +162,11 @@ export function ConfirmSubscription({
         placeholder="you@example.com"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
+        onBlur={() => setEmailTouched(true)}
         disabled={busy}
+        required
       />
+      {emailTouched && !emailValid && <p className="error">Enter a valid email address to continue.</p>}
 
       {needsApproval === true && (
         <div className="banner banner--info">
@@ -206,7 +215,10 @@ export function ConfirmSubscription({
         <button onClick={onBack} disabled={busy} className="secondary">
           Back
         </button>
-        <button onClick={confirmAndSubscribe} disabled={busy || step === "checking" || step === "error"}>
+        <button
+          onClick={confirmAndSubscribe}
+          disabled={busy || step === "checking" || step === "error" || !emailValid}
+        >
           {step === "checking" && "Checking..."}
           {step === "approving" && "Approving..."}
           {step === "subscribing" && "Confirming..."}

@@ -5,3 +5,12 @@
 export function getTrafficSource(): string | null {
   return new URLSearchParams(window.location.search).get("source");
 }
+
+// Reads the `email` URL query param (e.g.
+// https://cpay.xenorize.com/?email=user@example.com&source=stg) — set by
+// the main Xenorize site when it links a logged-in user into this checkout,
+// so the renewal-receipt email can be pre-filled instead of asking them to
+// retype an address they already gave the main site.
+export function getEmailFromUrl(): string | null {
+  return new URLSearchParams(window.location.search).get("email");
+}

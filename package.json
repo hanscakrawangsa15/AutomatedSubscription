@@ -18,7 +18,7 @@
     "keeper:mainnet-weth": "KEEPER_TOKEN_SUFFIX=_WETH hardhat run scripts/keeper.js --network mainnet",
     "keeper:base-weth": "KEEPER_TOKEN_SUFFIX=_WETH hardhat run scripts/keeper.js --network base",
     "keeper:bsc-wbnb": "KEEPER_TOKEN_SUFFIX=_WBNB hardhat run scripts/keeper.js --network bsc",
-    "keeper:solana-devnet": "node scripts/keeper.solana.js",
+    "keeper:bsc-usdc": "KEEPER_TOKEN_SUFFIX=_USDC hardhat run scripts/keeper.js --network bsc",
     "server": "node server/index.js"
   },
   "keywords": [],
@@ -35,9 +35,6 @@
     "hardhat": "^2.29.0"
   },
   "dependencies": {
-    "@coral-xyz/anchor": "^0.32.1",
-    "@solana/spl-token": "^0.4.15",
-    "@solana/web3.js": "^1.98.4",
     "mysql2": "^3.23.3"
   }
 }

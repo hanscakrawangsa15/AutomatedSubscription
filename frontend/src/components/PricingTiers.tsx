@@ -1,8 +1,6 @@
 import { useEffect, useState } from "react";
-import { fetchPlans, sleep, type PlanInfo } from "../lib/plans";
+import { fetchPlans, type PlanInfo } from "../lib/plans";
 import { getReadProvider } from "../lib/readProvider";
-import { getChainName } from "../lib/chains";
-import { getPaymentMethods } from "../lib/contracts";
 import {
   PRICING_TIERS,
   TEST_TIER,
@@ -12,72 +10,52 @@ import {
   type PricingTier,
 } from "../lib/pricingTiers";
 
+// USDT-only, single reference chain — every price shown here is identical
+// in USDT no matter which network the user ends up paying from (both
+// Ethereum's and BNB Chain's USDT managers were created from the exact same
+// 5-tier + test plan set — see scripts/create-plans-safe.js /
+// create-test-plan-safe.js), so plan availability only needs checking
+// against ONE canonical deployment. The actual payment network (ERC-20 on
+// Ethereum vs BEP-20 on BNB Chain) is chosen afterward, on the Confirm step
+// — see App.tsx's PaymentNetworkStep.
+const REFERENCE_CHAIN_ID = 1; // Ethereum Mainnet
+const REFERENCE_SUFFIX = "_USDT";
+
 type PricingTiersProps = {
-  chainId: number | bigint;
   refreshKey: number;
-  // Passes the tier/cycle alongside the resolved on-chain plan (not just
-  // the plan alone) so the caller can re-resolve the same tier choice if
-  // the connected chain changes later — see App.tsx's re-resolution effect.
+  // Passes the tier/cycle alongside the resolved (reference-chain) plan —
+  // App.tsx only uses tierId/cycle from this to re-resolve against whichever
+  // network the user picks on the next step, not the plan object itself.
   onSelect: (plan: PlanInfo, tierId: PricingTier["id"], cycle: BillingCycle) => void;
 };
 
-export function PricingTiers({ chainId, refreshKey, onSelect }: PricingTiersProps) {
-  const methods = getPaymentMethods(chainId);
-  const deployed = methods.length > 0;
-
-  // Keyed by token suffix ("" = primary) so the token-selector pills can
-  // show a live symbol/loading state for every method, not just whichever
-  // one is currently selected.
-  const [plansBySuffix, setPlansBySuffix] = useState<Record<string, PlanInfo[]>>({});
-  const [errorsBySuffix, setErrorsBySuffix] = useState<Record<string, string>>({});
-  const [selectedSuffix, setSelectedSuffix] = useState("");
+export function PricingTiers({ refreshKey, onSelect }: PricingTiersProps) {
+  const [plans, setPlans] = useState<PlanInfo[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [cycle, setCycle] = useState<BillingCycle>("monthly");
 
   useEffect(() => {
-    setPlansBySuffix({});
-    setErrorsBySuffix({});
-    setSelectedSuffix("");
-    if (!deployed) return;
-    const provider = getReadProvider(chainId);
+    setPlans(null);
+    setError(null);
+    const provider = getReadProvider(REFERENCE_CHAIN_ID);
     if (!provider) {
-      setErrorsBySuffix({ "": `No RPC configured for chain ${chainId}` });
+      setError(`No RPC configured for chain ${REFERENCE_CHAIN_ID}`);
       return;
     }
     let cancelled = false;
-    // Re-derived here (rather than closing over the outer `methods`) so
-    // this effect's dependency array can name every value it actually
-    // reads — getPaymentMethods() is cheap, memoized per chainId in
-    // contracts.ts.
-    //
-    // Staggered (not all fired at once): every method's fetch does several
-    // RPC calls internally, so N methods loading in the same instant can
-    // burst well past a free-tier RPC key's per-second limit right at
-    // mount — a stagger spreads that burst out without slowing down the
-    // typical 1-2 method case noticeably.
-    getPaymentMethods(chainId).forEach((method, index) => {
-      sleep(index * 250)
-        .then(() => (cancelled ? null : fetchPlans(provider, chainId, method.suffix)))
-        .then((loaded) => {
-          if (cancelled || !loaded) return;
-          setPlansBySuffix((prev) => ({ ...prev, [method.suffix]: loaded }));
-        })
-        .catch((err) => {
-          if (cancelled) return;
-          setErrorsBySuffix((prev) => ({
-            ...prev,
-            [method.suffix]: err instanceof Error ? err.message : "Failed to load plans",
-          }));
-        });
-    });
+    fetchPlans(provider, REFERENCE_CHAIN_ID, REFERENCE_SUFFIX)
+      .then((loaded) => {
+        if (!cancelled) setPlans(loaded);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load plans");
+      });
     return () => {
       cancelled = true;
     };
-  }, [chainId, deployed, refreshKey]);
+  }, [refreshKey]);
 
-  const plans = plansBySuffix[selectedSuffix] ?? null;
-  const error = errorsBySuffix[selectedSuffix];
   const visibleTiers = PRICING_TIERS.filter((t) => priceForCycle(t, cycle) !== undefined);
-  const selectedSymbol = plans?.[0]?.tokenSymbol;
   const testPlan = findOnChainPlan(plans, TEST_TIER, "test");
 
   return (
@@ -88,27 +66,13 @@ export function PricingTiers({ chainId, refreshKey, onSelect }: PricingTiersProp
         reducing mistakes, and keeping your strategy running even when you're away.
       </p>
       <p className="muted" style={{ textAlign: "center" }}>
-        Pay in {selectedSymbol ?? "USDC/USDT"} on {getChainName(chainId)}. Cancel anytime.
+        Pay in USDT — choose Ethereum or BNB Chain on the next step. Cancel anytime.
       </p>
 
-      {!deployed && <p className="muted" style={{ textAlign: "center" }}>Not deployed on {getChainName(chainId)} yet.</p>}
-      {error && <p className="error" style={{ textAlign: "center" }}>{error}</p>}
-
-      {methods.length > 1 && (
-        <div className="billing-toggle">
-          {methods.map((m) => {
-            const symbol = plansBySuffix[m.suffix]?.[0]?.tokenSymbol ?? (m.suffix.replace(/^_/, "") || "Default");
-            return (
-              <button
-                key={m.suffix}
-                className={selectedSuffix === m.suffix ? "active" : ""}
-                onClick={() => setSelectedSuffix(m.suffix)}
-              >
-                Pay with {symbol}
-              </button>
-            );
-          })}
-        </div>
+      {error && (
+        <p className="error" style={{ textAlign: "center" }}>
+          {error}
+        </p>
       )}
 
       <div className="billing-toggle">
@@ -124,7 +88,7 @@ export function PricingTiers({ chainId, refreshKey, onSelect }: PricingTiersProp
         {visibleTiers.map((tier) => {
           const price = priceForCycle(tier, cycle)!;
           const onChainPlan = findOnChainPlan(plans, tier, cycle);
-          const loading = deployed && !plans && !error;
+          const loading = !plans && !error;
           return (
             <div key={tier.id} className={`pricing-card ${tier.bestDeal ? "pricing-card--best-deal" : ""}`}>
               {tier.bestDeal && <div className="pricing-card__ribbon">🏷️ BEST DEAL</div>}
@@ -141,7 +105,7 @@ export function PricingTiers({ chainId, refreshKey, onSelect }: PricingTiersProp
               <button
                 disabled={!onChainPlan}
                 onClick={() => onChainPlan && onSelect(onChainPlan, tier.id, cycle)}
-                title={!onChainPlan && !loading ? "This plan isn't live on-chain on this network yet" : undefined}
+                title={!onChainPlan && !loading ? "This plan isn't live on-chain yet" : undefined}
               >
                 {loading ? "Loading..." : onChainPlan ? "Get Started" : "Coming soon"}
               </button>
