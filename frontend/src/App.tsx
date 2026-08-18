@@ -23,7 +23,7 @@ import { useSolanaWallet } from "./hooks/useSolanaWallet";
 import { SUPPORTED_CHAINS, DEFAULT_CHAIN, getChainName } from "./lib/chains";
 import { fetchPlans, type PlanInfo } from "./lib/plans";
 import { getReadProvider } from "./lib/readProvider";
-import { PRICING_TIERS, findOnChainPlan, type BillingCycle, type PricingTier } from "./lib/pricingTiers";
+import { PRICING_TIERS, TEST_TIER, findOnChainPlan, type BillingCycle, type PricingTier } from "./lib/pricingTiers";
 import type { SolanaPlanInfo } from "./lib/solanaPlans";
 
 const ACTIVE = 1;
@@ -118,7 +118,7 @@ function EvmApp() {
     fetchPlans(provider, readChainId, selectedTier.tokenSuffix)
       .then((plans) => {
         if (cancelled) return;
-        const tier = PRICING_TIERS.find((t) => t.id === selectedTier.tierId);
+        const tier = [...PRICING_TIERS, TEST_TIER].find((t) => t.id === selectedTier.tierId);
         const match = tier ? findOnChainPlan(plans, tier, selectedTier.cycle) : undefined;
         if (match) {
           setSelectedPlan(match);

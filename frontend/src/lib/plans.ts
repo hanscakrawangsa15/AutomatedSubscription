@@ -64,11 +64,13 @@ async function fetchPlansOnce(runner: Provider, chainId: number | bigint, suffix
   const [count, decimals, symbol] = await Promise.all([manager.planCount(), usdc.decimals(), usdc.symbol()]);
   const chainIdNum = Number(chainId);
 
-  const plans: PlanInfo[] = [];
-  for (let i = 0; i < Number(count); i++) {
-    const p = await manager.plans(i);
+  // Fired in parallel (not a sequential for-await loop) so every plans(i)
+  // call is pending at once — that's what lets getReadProvider's batching
+  // combine them into one HTTP request instead of N separate round trips.
+  const rawPlans = await Promise.all(Array.from({ length: Number(count) }, (_, i) => manager.plans(i)));
+  return rawPlans.map((p, i) => {
     const intervalDays = Number(p.interval) / 86400;
-    plans.push({
+    return {
       id: i,
       chainId: chainIdNum,
       tokenSuffix: suffix,
@@ -82,7 +84,6 @@ async function fetchPlansOnce(runner: Provider, chainId: number | bigint, suffix
       graceDays: Number(p.gracePeriod) / 86400,
       active: p.active,
       kind: classifyInterval(intervalDays),
-    });
-  }
-  return plans;
+    };
+  });
 }

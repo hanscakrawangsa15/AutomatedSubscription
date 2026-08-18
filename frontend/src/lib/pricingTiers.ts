@@ -1,7 +1,7 @@
-export type BillingCycle = "monthly" | "yearly";
+export type BillingCycle = "monthly" | "yearly" | "test";
 
 export type PricingTier = {
-  id: "starter" | "basic" | "advance";
+  id: "starter" | "basic" | "advance" | "test";
   name: string;
   icon: string;
   bestDeal?: boolean;
@@ -41,7 +41,21 @@ export const PRICING_TIERS: PricingTier[] = [
   },
 ];
 
+// Internal QA-only plan ($1, charges hourly — see scripts/create-test-plan-safe.js)
+// for verifying the keeper's auto-charge flow on real mainnet without
+// waiting a full 30-day cycle. Deliberately kept OUT of PRICING_TIERS (never
+// shows in the customer-facing Monthly/Yearly grid) — PricingTiers.tsx
+// surfaces it as its own small always-visible card instead.
+export const TEST_TIER: PricingTier = {
+  id: "test",
+  name: "Test Plan",
+  icon: "🧪",
+  monthlyPrice: 1,
+  features: [],
+};
+
 export function priceForCycle(tier: PricingTier, cycle: BillingCycle): number | undefined {
+  if (cycle === "test") return tier.monthlyPrice;
   return cycle === "monthly" ? tier.monthlyPrice : tier.yearlyPrice;
 }
 
@@ -71,7 +85,7 @@ export function findOnChainPlan<P extends { active: boolean; kind: string; price
 ): P | undefined {
   const targetPrice = priceForCycle(tier, cycle);
   if (targetPrice === undefined || !plans) return undefined;
-  const kind = cycle === "monthly" ? "monthly" : "yearly";
+  const kind = cycle === "monthly" ? "monthly" : cycle === "yearly" ? "yearly" : "test";
 
   const byPrice = plans.find((p) => p.active && p.kind === kind && Math.abs(Number(p.price) - targetPrice) < 0.01);
   if (byPrice) return byPrice;
