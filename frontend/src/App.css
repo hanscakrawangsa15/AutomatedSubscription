@@ -152,9 +152,10 @@ body {
 }
 
 .back-link {
-  color: var(--color-text-muted);
+  color: var(--color-text);
   text-decoration: none;
-  font-size: 0.85rem;
+  font-size: 1.05rem;
+  font-weight: 600;
   padding: 6px 12px;
   border: 1px solid var(--color-border);
   border-radius: 8px;

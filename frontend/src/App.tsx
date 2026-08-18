@@ -101,7 +101,7 @@ function App() {
     <>
       <nav className="network-family-switch">
         <a className="back-link" href="https://xenorize.com/account?tab=subscription">
-          &larr; Back
+          &larr; Back to Dashboard
         </a>
       </nav>
       <div className="app">
