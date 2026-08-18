@@ -1,7 +1,6 @@
 require("dotenv").config();
-const fs = require("fs");
-const path = require("path");
 const hre = require("hardhat");
+const { lookupSubscriberEmail } = require("./subscribersDb");
 
 const POLL_INTERVAL_MS = Number(process.env.KEEPER_POLL_MS || 10_000);
 
@@ -15,16 +14,33 @@ const LOCAL_CHAIN_DEFAULTS = {
   },
 };
 
-// Minimal ERC20-metadata ABI — the keeper only needs decimals(). Using a
-// generic interface here (rather than typing the token as MockUSDC) keeps
-// this script correct against real USDC on mainnet too, not just the mock.
-const ERC20_METADATA_ABI = ["function decimals() view returns (uint8)"];
+// Minimal ERC20-metadata ABI — the keeper needs decimals() and symbol()
+// (the latter only for renewal-email copy). Using a generic interface here
+// (rather than typing the token as MockUSDC) keeps this script correct
+// against any real token on mainnet too, not just the mock.
+const ERC20_METADATA_ABI = [
+  "function decimals() view returns (uint8)",
+  "function symbol() view returns (string)",
+];
+
+// A chain can have more than one SubscriptionManager instance now (one per
+// payment token — paymentToken is immutable, so a second token means a
+// second deployment). KEEPER_TOKEN_SUFFIX picks which one this process
+// watches; "" (default) is every chain's original/primary token and is
+// 100% behavior-compatible with every prior invocation. Read as part of
+// the chainId-keyed env var (not a separate global fallback) so a chain
+// whose primary vars are already set doesn't accidentally shadow a second
+// process meant for its secondary token.
+const TOKEN_SUFFIX = process.env.KEEPER_TOKEN_SUFFIX || "";
 
 function resolveAddresses(chainId) {
-  const manager = process.env[`SUBSCRIPTION_MANAGER_ADDRESS_${chainId}`] || process.env.MANAGER_ADDRESS;
-  const usdc = process.env[`USDC_ADDRESS_${chainId}`] || process.env.USDC_ADDRESS;
-  const fallback = LOCAL_CHAIN_DEFAULTS[chainId];
-  const deployBlock = Number(process.env[`SUBSCRIPTION_MANAGER_DEPLOY_BLOCK_${chainId}`] || 0);
+  const suffix = TOKEN_SUFFIX;
+  const manager =
+    process.env[`SUBSCRIPTION_MANAGER_ADDRESS_${chainId}${suffix}`] || (suffix === "" ? process.env.MANAGER_ADDRESS : undefined);
+  const usdc =
+    process.env[`USDC_ADDRESS_${chainId}${suffix}`] || (suffix === "" ? process.env.USDC_ADDRESS : undefined);
+  const fallback = suffix === "" ? LOCAL_CHAIN_DEFAULTS[chainId] : undefined;
+  const deployBlock = Number(process.env[`SUBSCRIPTION_MANAGER_DEPLOY_BLOCK_${chainId}${suffix}`] || 0);
   return {
     manager: manager || fallback?.manager,
     usdc: usdc || fallback?.usdc,
@@ -68,18 +84,16 @@ async function queryLogsChunked(contract, filter, fromBlock, toBlock) {
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const FROM_EMAIL = process.env.NOTIFY_FROM_EMAIL || "onboarding@resend.dev";
-const SUBSCRIBERS_FILE = path.join(__dirname, "..", "server", "subscribers.json");
 
 let warnedNoApiKey = false;
 
-function loadSubscriberEmail(address) {
-  if (!fs.existsSync(SUBSCRIBERS_FILE)) return null;
-  try {
-    const data = JSON.parse(fs.readFileSync(SUBSCRIBERS_FILE, "utf8"));
-    return data[address.toLowerCase()] || null;
-  } catch {
-    return null;
-  }
+// Matches frontend/src/lib/chains.ts's chain_name slugs — must stay in
+// sync, since server/index.js writes rows keyed by that exact slug when a
+// subscribe() transaction confirms.
+const CHAIN_NAMES = { 8453: "base-mainnet", 1: "ethereum-mainnet", 56: "bnb-mainnet" };
+
+function chainNameFor(chainId) {
+  return CHAIN_NAMES[Number(chainId)] || `evm-${chainId}`;
 }
 
 function planLabel(intervalSeconds) {
@@ -151,9 +165,11 @@ async function main() {
   const [keeper] = await hre.ethers.getSigners();
   const manager = await hre.ethers.getContractAt("SubscriptionManager", managerAddress, keeper);
   const usdc = new hre.ethers.Contract(usdcAddress, ERC20_METADATA_ABI, keeper);
-  const decimals = await usdc.decimals();
+  const [decimals, tokenSymbol] = await Promise.all([usdc.decimals(), usdc.symbol()]);
 
-  console.log(`Keeper running as ${keeper.address} on chainId ${chainId}`);
+  console.log(
+    `Keeper running as ${keeper.address} on chainId ${chainId}${TOKEN_SUFFIX ? ` [token suffix: ${TOKEN_SUFFIX}]` : ""} (${tokenSymbol})`,
+  );
   console.log(`Watching ${managerAddress}, polling every ${POLL_INTERVAL_MS / 1000}s. Ctrl+C to stop.\n`);
 
   const knownUsers = new Set();
@@ -184,13 +200,18 @@ async function main() {
     lastScannedBlock = latest;
   };
 
+  const chainName = chainNameFor(chainId);
+
   const notifyIfRegistered = async (user, sub, txHash) => {
-    const email = loadSubscriberEmail(user);
+    const email = await lookupSubscriberEmail(user.toLowerCase(), chainName).catch((err) => {
+      console.warn(`Subscriber email lookup failed for ${user}: ${err.message}`);
+      return null;
+    });
     if (!email) return;
     const plan = await manager.plans(sub.planId);
     await sendReceiptEmail({
       to: email,
-      amountLabel: `${hre.ethers.formatUnits(plan.price, decimals)} USDC`,
+      amountLabel: `${hre.ethers.formatUnits(plan.price, decimals)} ${tokenSymbol}`,
       plan: planLabel(Number(plan.interval)),
       nextChargeAt: new Date(Number(sub.nextChargeAt) * 1000).toLocaleString(),
       txHash,

@@ -7,21 +7,18 @@
     "node": "hardhat node",
     "compile": "hardhat compile",
     "deploy:local": "hardhat run scripts/deploy.js --network localhost",
-    "deploy:base-sepolia": "hardhat run scripts/deploy.js --network baseSepolia",
-    "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
-    "deploy:bsc-testnet": "hardhat run scripts/deploy.js --network bscTestnet",
     "deploy:base": "hardhat run scripts/deploy.js --network base",
     "deploy:mainnet": "hardhat run scripts/deploy.js --network mainnet",
     "deploy:bsc": "hardhat run scripts/deploy.js --network bsc",
     "keeper": "hardhat run scripts/keeper.js --network localhost",
-    "keeper:base-sepolia": "hardhat run scripts/keeper.js --network baseSepolia",
-    "keeper:sepolia": "hardhat run scripts/keeper.js --network sepolia",
-    "keeper:bsc-testnet": "hardhat run scripts/keeper.js --network bscTestnet",
     "keeper:base": "hardhat run scripts/keeper.js --network base",
     "keeper:mainnet": "hardhat run scripts/keeper.js --network mainnet",
     "keeper:bsc": "hardhat run scripts/keeper.js --network bsc",
-    "deploy:tron-nile": "cd tron && npm run migrate:nile",
-    "keeper:tron-nile": "node scripts/keeper.tron.js",
+    "keeper:mainnet-usdt": "KEEPER_TOKEN_SUFFIX=_USDT hardhat run scripts/keeper.js --network mainnet",
+    "keeper:mainnet-weth": "KEEPER_TOKEN_SUFFIX=_WETH hardhat run scripts/keeper.js --network mainnet",
+    "keeper:base-weth": "KEEPER_TOKEN_SUFFIX=_WETH hardhat run scripts/keeper.js --network base",
+    "keeper:bsc-wbnb": "KEEPER_TOKEN_SUFFIX=_WBNB hardhat run scripts/keeper.js --network bsc",
+    "keeper:solana-devnet": "node scripts/keeper.solana.js",
     "server": "node server/index.js"
   },
   "keywords": [],
@@ -31,12 +28,16 @@
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
     "@openzeppelin/contracts": "^5.6.1",
+    "@safe-global/protocol-kit": "^8.0.6",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "hardhat": "^2.29.0"
   },
   "dependencies": {
-    "tronweb": "^6.4.0"
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana/spl-token": "^0.4.15",
+    "@solana/web3.js": "^1.98.4",
+    "mysql2": "^3.23.3"
   }
 }

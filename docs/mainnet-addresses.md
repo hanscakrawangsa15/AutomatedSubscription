@@ -43,6 +43,90 @@ row.**
 - Found: 2026-08-07, cross-referenced via BaseScan listing
 - Verified by: _(pending — human must confirm on BaseScan before deploy)_
 
+## Ethereum Mainnet — USDT (secondary payment method)
+
+**This is a second `SubscriptionManager` instance on chainId 1, not a new
+chain.** `paymentToken` is immutable, so a second payment token on an
+already-listed chain means a second deployment (env var suffix `_USDT`,
+e.g. `USDC_ADDRESS_1_USDT` / `SUBSCRIPTION_MANAGER_ADDRESS_1_USDT`) — see
+the pilot plan for the multi-token infrastructure this depends on.
+
+- Token: Tether USD (USDT), the canonical Ethereum-mainnet contract
+- Address: `0xdAC17F958D2ee523a2206206994597C13D831ec7`
+- Decimals: 6
+- Explorer: https://etherscan.io/address/0xdAC17F958D2ee523a2206206994597C13D831ec7
+- Found: 2026-08-17, well-known canonical address — **live-verified** via a
+  direct `name()`/`symbol()`/`decimals()`/`totalSupply()` read against
+  Ethereum Mainnet: `{ name: "Tether USD", symbol: "USDT", decimals: 6,
+  totalSupply: ~90.3B USDT }` — matches expectations exactly.
+- Verified by: Claude (live on-chain read, 2026-08-17) — a human should
+  still glance at the Etherscan link above before this is used in any
+  deploy.
+- Note: real USDT's `approve()` reverts if changing a nonzero allowance
+  directly to another nonzero value (must reset to 0 first) — handled
+  generically in `ConfirmSubscription.tsx`, and deliberately replicated in
+  `contracts/mocks/MockUSDT.sol` so the testnet pilot actually exercises
+  that path before it meets the real contract.
+
+## Ethereum Mainnet — WETH (secondary payment method)
+
+**Second `SubscriptionManager` instance on chainId 1** (env var suffix
+`_WETH`). Unlike USDC/USDT, WETH is not pegged to USD — plan prices are a
+**fixed WETH amount set at creation time** (via
+`REFERENCE_TOKEN_PRICE_USD` passed to `scripts/create-plans-safe.js`), not
+a live oracle conversion. This drifts from the tier's true $ value as
+ETH's price moves and needs a periodic manual re-price (new plans +
+deactivate old) — a deliberate tradeoff to avoid a much larger contract
+change (see the wrapped-token planning discussion), not an oversight.
+
+- Token: Wrapped Ether (WETH)
+- Address: `0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2`
+- Decimals: 18
+- Explorer: https://etherscan.io/address/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2
+- Found: 2026-08-18, well-known canonical address — **live-verified** via a
+  direct `name()`/`symbol()`/`decimals()`/`totalSupply()` read: `{ name:
+  "Wrapped Ether", symbol: "WETH", decimals: 18, totalSupply: ~2.23M WETH }`
+  — matches expectations exactly.
+- Verified by: Claude (live on-chain read, 2026-08-18) — a human should
+  still glance at the Etherscan link above before this is used in any
+  further deploy.
+- Plans created at ETH ≈ $1906.58 (CoinGecko, 2026-08-18) — cross-checked
+  against CoinMarketCap same day (ETH $1906.12, ~0.02% difference,
+  negligible). `CMC_API_KEY` is available in `.env` for cross-checking
+  future re-prices.
+
+## Base — WETH (secondary payment method)
+
+Same pattern as Ethereum's WETH entry above (second `SubscriptionManager`
+instance, suffix `_WETH`, fixed-amount pricing at creation time).
+
+- Token: Wrapped Ether (WETH) — Base's canonical predeploy address
+- Address: `0x4200000000000000000000000000000000000006`
+- Decimals: 18
+- Explorer: https://basescan.org/address/0x4200000000000000000000000000000000000006
+- Found: 2026-08-18, well-known canonical address — **live-verified** via a
+  direct `name()`/`symbol()`/`decimals()`/`totalSupply()` read: `{ name:
+  "Wrapped Ether", symbol: "WETH", decimals: 18, totalSupply: ~263K WETH }`
+  — matches expectations exactly.
+- Verified by: Claude (live on-chain read, 2026-08-18).
+- Plans created at ETH ≈ $1906.58 (CoinGecko, 2026-08-18).
+
+## BNB Chain — WBNB (secondary payment method)
+
+Same pattern again (second `SubscriptionManager` instance, suffix
+`_WBNB`, fixed-amount pricing at creation time).
+
+- Token: Wrapped BNB (WBNB)
+- Address: `0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c`
+- Decimals: 18
+- Explorer: https://bscscan.com/address/0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c
+- Found: 2026-08-18, well-known canonical address — **live-verified** via a
+  direct `name()`/`symbol()`/`decimals()`/`totalSupply()` read: `{ name:
+  "Wrapped BNB", symbol: "WBNB", decimals: 18, totalSupply: ~1.78M WBNB }`
+  — matches expectations exactly.
+- Verified by: Claude (live on-chain read, 2026-08-18).
+- Plans created at BNB ≈ $605.68 (CoinGecko, 2026-08-18).
+
 ## BNB Chain (chainId 56)
 
 **Decision (2026-08-07): use USDT here, not USDC.** BNB Chain has no
@@ -66,30 +150,6 @@ auditor doesn't assume all three chains use the same token.
 - Explorer: https://bscscan.com/token/0x55d398326f99059fF775485246999027B3197955
 - Found: 2026-08-07, cross-referenced via BscScan listing + CoinGecko
 - Verified by: _(pending — human must confirm on BscScan before deploy)_
-
-## TRON Mainnet
-
-**Not an EVM chain — no numeric chainId, no `SubscriptionManager` deployment yet.**
-This entry is plumbing-only (frontend can point at the real USDT contract once
-`SubscriptionManager` is actually deployed to TRON Mainnet — see
-`VITE_TRON_MAINNET_MANAGER_ADDRESS` in `frontend/.env.example`, intentionally
-left blank). That deployment needs a security audit specific to the TVM build
-first, same bar as the other mainnet chains — see `tron/README.md` and the
-mainnet-readiness plan.
-
-- Token: Tether USD (USDT), TRC20 — the canonical/dominant USDT contract on
-  TRON, used by essentially every wallet and exchange.
-- Address: `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`
-- Decimals: 6
-- Explorer: https://tronscan.org/#/token20/TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
-- Found: 2026-08-12, cross-referenced via web search (Bitget, Datawallet,
-  Tether's own supported-protocols page, Bitquery) — **and live-verified**
-  via a direct on-chain `name()`/`symbol()`/`decimals()` read against
-  `api.trongrid.io`, returning `{ name: "Tether USD", symbol: "USDT",
-  decimals: 6 }`, matching expectations exactly.
-- Verified by: Claude (live on-chain read, 2026-08-12) — a human should still
-  glance at the Tronscan link above before this is ever used in a real
-  mainnet deploy, per this project's standing rule.
 
 ## Next steps before these go into `.env`
 

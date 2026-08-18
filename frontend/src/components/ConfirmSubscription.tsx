@@ -1,13 +1,20 @@
 import { useEffect, useState } from "react";
-import type { JsonRpcSigner } from "ethers";
+import { formatUnits, type JsonRpcSigner } from "ethers";
 import { getMockUsdc, getSubscriptionManager, getChainAddresses } from "../lib/contracts";
 import { formatTxError } from "../lib/errors";
 import { formatDuration, type PlanInfo } from "../lib/plans";
-import { EMAIL_RE, registerNotificationEmail } from "../lib/notify";
+import { EMAIL_RE, reportSubscription } from "../lib/notify";
+import { getChainSlug } from "../lib/chains";
+import { getTrafficSource } from "../lib/trafficSource";
 
 const PLAN_LABELS: Record<string, string> = { monthly: "Monthly", yearly: "Yearly", test: "Test" };
 
-const PERIODS_TO_APPROVE = 12n;
+// Kept low (rather than e.g. 12) because wallet security scanners like
+// Blockaid (built into MetaMask) flag approvals that are a large multiple
+// of the immediate charge as a "deceptive request" — a real false positive
+// seen in production. A smaller ratio trades off less-frequent re-approval
+// for a much lower chance of scaring off legitimate subscribers.
+const PERIODS_TO_APPROVE = 3n;
 
 type Step = "checking" | "ready" | "approving" | "subscribing" | "error";
 
@@ -30,11 +37,17 @@ export function ConfirmSubscription({
 }: ConfirmSubscriptionProps) {
   const [step, setStep] = useState<Step>("checking");
   const [needsApproval, setNeedsApproval] = useState<boolean | null>(null);
+  // Some tokens (real mainnet USDT included) revert if you approve a
+  // nonzero amount over an already-nonzero allowance — a stale partial
+  // allowance must be reset to 0 first. Tracked generically (not
+  // symbol-matched) so any token with the same quirk is handled the same
+  // way, and so it costs nothing extra for a token that doesn't need it.
+  const [needsReset, setNeedsReset] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [notifyStatus, setNotifyStatus] = useState<"idle" | "sent" | "failed">("idle");
 
-  const managerAddress = getChainAddresses(chainId)?.manager;
+  const managerAddress = getChainAddresses(chainId, plan.tokenSuffix)?.manager;
 
   useEffect(() => {
     if (!managerAddress) {
@@ -43,11 +56,13 @@ export function ConfirmSubscription({
       return;
     }
     let cancelled = false;
-    getMockUsdc(signer, chainId)
+    getMockUsdc(signer, chainId, plan.tokenSuffix)
       .allowance(account, managerAddress)
       .then((allowance: bigint) => {
         if (cancelled) return;
-        setNeedsApproval(allowance < plan.priceRaw);
+        const target = plan.priceRaw * PERIODS_TO_APPROVE;
+        setNeedsApproval(allowance < target);
+        setNeedsReset(allowance > 0n && allowance < target);
         setStep("ready");
       })
       .catch((err: unknown) => {
@@ -58,7 +73,7 @@ export function ConfirmSubscription({
     return () => {
       cancelled = true;
     };
-  }, [signer, account, chainId, managerAddress, plan.priceRaw]);
+  }, [signer, account, chainId, managerAddress, plan.priceRaw, plan.tokenSuffix]);
 
   const confirmAndSubscribe = async () => {
     if (!managerAddress) return;
@@ -66,20 +81,31 @@ export function ConfirmSubscription({
     try {
       if (needsApproval) {
         setStep("approving");
-        const usdc = getMockUsdc(signer, chainId);
+        const usdc = getMockUsdc(signer, chainId, plan.tokenSuffix);
+        if (needsReset) {
+          const resetTx = await usdc.approve(managerAddress, 0n);
+          await resetTx.wait();
+        }
         const tx = await usdc.approve(managerAddress, plan.priceRaw * PERIODS_TO_APPROVE);
         await tx.wait();
       }
 
       setStep("subscribing");
-      const manager = getSubscriptionManager(signer, chainId);
+      const manager = getSubscriptionManager(signer, chainId, plan.tokenSuffix);
       const tx = await manager.subscribe(plan.id);
       await tx.wait();
 
-      if (email && EMAIL_RE.test(email)) {
-        const ok = await registerNotificationEmail(account, email);
-        setNotifyStatus(ok ? "sent" : "failed");
-      }
+      const ok = await reportSubscription({
+        address: account,
+        chainName: getChainSlug(chainId),
+        chainId: Number(chainId),
+        email: email && EMAIL_RE.test(email) ? email : undefined,
+        trafficSource: getTrafficSource(),
+        planId: plan.id,
+        planLabel: PLAN_LABELS[plan.kind] ?? plan.kind,
+        txHash: tx.hash,
+      });
+      if (email && EMAIL_RE.test(email)) setNotifyStatus(ok ? "sent" : "failed");
 
       onSubscribed();
     } catch (err) {
@@ -89,6 +115,10 @@ export function ConfirmSubscription({
   };
 
   const busy = step === "approving" || step === "subscribing";
+  // Precise bigint-based formatting, not Number(plan.price) * N — that loses
+  // precision for tokens with small fractional prices (e.g. WETH plans
+  // priced at ~0.005 tokens), where toFixed(2) rounded 0.015735 to "0.02".
+  const approveCapDisplay = formatUnits(plan.priceRaw * PERIODS_TO_APPROVE, plan.decimals);
 
   return (
     <section className="checkout-step">
@@ -101,7 +131,9 @@ export function ConfirmSubscription({
         </div>
         <div className="summary-row">
           <span>Price</span>
-          <strong>{plan.price} USDC</strong>
+          <strong>
+            {plan.price} {plan.tokenSymbol}
+          </strong>
         </div>
         <div className="summary-row">
           <span>Billing interval</span>
@@ -128,22 +160,43 @@ export function ConfirmSubscription({
       />
 
       {needsApproval === true && (
-        <p className="muted">
-          You'll be asked to confirm <strong>twice</strong>: first to approve USDC spending (covering{" "}
-          {PERIODS_TO_APPROVE.toString()} billing cycles, so you won't be asked again for a while), then to
-          start your subscription.
-        </p>
+        <div className="banner banner--info">
+          You'll confirm <strong>{needsReset ? "up to three times" : "twice"}</strong> in your wallet:
+          <ol style={{ margin: "6px 0", paddingLeft: 20 }}>
+            {needsReset && (
+              <li>
+                <strong>Reset your existing {plan.tokenSymbol} allowance to 0.</strong> {plan.tokenSymbol} requires
+                clearing an old spending cap before setting a new one — a one-time housekeeping step, no funds move.
+              </li>
+            )}
+            <li>
+              <strong>
+                Approve spending cap: {approveCapDisplay} {plan.tokenSymbol}.
+              </strong>{" "}
+              This is a permission ceiling, not a charge — nothing is taken from your wallet in this step. It covers{" "}
+              {PERIODS_TO_APPROVE.toString()} billing cycles so you won't be asked again for a while.
+            </li>
+            <li>
+              <strong>
+                Subscribe — charges {plan.price} {plan.tokenSymbol} now.
+              </strong>{" "}
+              Only this amount actually leaves your wallet today. Future renewals pull {plan.price} {plan.tokenSymbol}{" "}
+              automatically from the approved cap, with no further wallet confirmation needed — until the cap runs
+              out.
+            </li>
+          </ol>
+        </div>
       )}
       {needsApproval === false && (
         <p className="muted">
-          You already approved enough USDC — this only needs <strong>one</strong> wallet confirmation.
+          You already approved enough {plan.tokenSymbol} — this only needs <strong>one</strong> wallet confirmation.
         </p>
       )}
 
       <ol className="step-indicator">
         {needsApproval !== false && (
           <li className={step === "approving" ? "active" : step === "subscribing" ? "done" : ""}>
-            Approve USDC spending
+            Approve {plan.tokenSymbol} spending
           </li>
         )}
         <li className={step === "subscribing" ? "active" : ""}>Confirm subscription</li>

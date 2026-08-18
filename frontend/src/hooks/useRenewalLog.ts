@@ -55,7 +55,7 @@ async function queryRecentCharges(
  * same batching happens on every retry. A dedicated read-only connection we
  * control sidesteps that regardless of what the wallet is configured with.
  */
-export function useRenewalLog(account: string, chainId: number | bigint) {
+export function useRenewalLog(account: string, chainId: number | bigint, tokenSuffix = "") {
   const [entries, setEntries] = useState<RenewalEntry[]>([]);
 
   useEffect(() => {
@@ -63,8 +63,8 @@ export function useRenewalLog(account: string, chainId: number | bigint) {
     const readProvider = getReadProvider(chainId);
     if (!readProvider) return;
 
-    const manager = getSubscriptionManager(readProvider, chainId);
-    const usdc = getMockUsdc(readProvider, chainId);
+    const manager = getSubscriptionManager(readProvider, chainId, tokenSuffix);
+    const usdc = getMockUsdc(readProvider, chainId, tokenSuffix);
     const filter = manager.filters.Charged(account);
 
     const backfill = async () => {
@@ -113,7 +113,7 @@ export function useRenewalLog(account: string, chainId: number | bigint) {
       cancelled = true;
       manager.off(filter, handleCharged);
     };
-  }, [account, chainId]);
+  }, [account, chainId, tokenSuffix]);
 
   return entries;
 }

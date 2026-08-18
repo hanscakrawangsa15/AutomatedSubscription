@@ -12,6 +12,10 @@ type ManageSubscriptionProps = {
   signer: JsonRpcSigner;
   account: string;
   chainId: number | bigint;
+  // "" = the chain's primary/default payment method. See App.tsx's
+  // subscription-discovery effect, which resolves this by checking every
+  // configured manager for an Active/Overdue subscription.
+  tokenSuffix: string;
   refreshKey: number;
   onChanged: () => void;
   justSubscribed?: boolean;
@@ -25,6 +29,7 @@ type SubInfo = {
   periodsPaid: number;
   planLabel: string;
   intervalSeconds: number;
+  tokenSymbol: string;
 };
 
 function formatTimestamp(ts: number) {
@@ -36,6 +41,7 @@ export function ManageSubscription({
   signer,
   account,
   chainId,
+  tokenSuffix,
   refreshKey,
   onChanged,
   justSubscribed,
@@ -43,15 +49,16 @@ export function ManageSubscription({
   const [info, setInfo] = useState<SubInfo | null>(null);
   const [walletBalance, setWalletBalance] = useState<string | null>(null);
   const { status, run } = useTxStatus();
-  const renewalLog = useRenewalLog(account, chainId);
+  const renewalLog = useRenewalLog(account, chainId, tokenSuffix);
 
   const load = useCallback(async () => {
-    const manager = getSubscriptionManager(signer, chainId);
-    const usdc = getMockUsdc(signer, chainId);
-    const [sub, balanceRaw, decimals] = await Promise.all([
+    const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
+    const usdc = getMockUsdc(signer, chainId, tokenSuffix);
+    const [sub, balanceRaw, decimals, symbol] = await Promise.all([
       manager.subscriptions(account),
       usdc.balanceOf(account),
       usdc.decimals(),
+      usdc.symbol(),
     ]);
     const plan = await manager.plans(sub.planId);
     const intervalSeconds = Number(plan.interval);
@@ -64,9 +71,10 @@ export function ManageSubscription({
       periodsPaid: Number(sub.periodsPaid),
       planLabel: PLAN_LABELS[kind] ?? `Plan #${sub.planId}`,
       intervalSeconds,
+      tokenSymbol: symbol,
     });
     setWalletBalance(formatUnits(balanceRaw, decimals));
-  }, [signer, account, chainId]);
+  }, [signer, account, chainId, tokenSuffix]);
 
   useEffect(() => {
     void load();
@@ -80,7 +88,7 @@ export function ManageSubscription({
 
   const cancel = () =>
     run(async () => {
-      const manager = getSubscriptionManager(signer, chainId);
+      const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
       const tx = await manager.cancel();
       await tx.wait();
       await load();
@@ -89,7 +97,7 @@ export function ManageSubscription({
 
   const payNow = () =>
     run(async () => {
-      const manager = getSubscriptionManager(signer, chainId);
+      const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
       const tx = await manager.payNow();
       await tx.wait();
       await load();
@@ -98,7 +106,7 @@ export function ManageSubscription({
 
   const retryCharge = () =>
     run(async () => {
-      const manager = getSubscriptionManager(signer, chainId);
+      const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
       const tx = await manager.retryCharge(account);
       await tx.wait();
       await load();
@@ -122,7 +130,7 @@ export function ManageSubscription({
       <div className="summary-card">
         <div className="summary-row">
           <span>Wallet balance</span>
-          <strong>{walletBalance !== null ? `${walletBalance} USDC` : "..."}</strong>
+          <strong>{walletBalance !== null ? `${walletBalance} ${info.tokenSymbol}` : "..."}</strong>
         </div>
         <div className="summary-row">
           <span>Status</span>
@@ -157,8 +165,8 @@ export function ManageSubscription({
 
       <p className="muted">
         Renewals are charged automatically every {formatDuration(info.intervalSeconds)} by an off-chain keeper (bot/cron/
-        Chainlink Automation) calling the contract — make sure your wallet keeps enough USDC balance and
-        allowance.
+        Chainlink Automation) calling the contract — make sure your wallet keeps enough {info.tokenSymbol} balance
+        and allowance.
       </p>
 
       {renewalLog.length > 0 && (
@@ -168,7 +176,9 @@ export function ManageSubscription({
             {renewalLog.map((entry) => (
               <li key={entry.key}>
                 <span>{new Date(entry.timestamp * 1000).toLocaleString()}</span>
-                <span>Charged {entry.amount} USDC</span>
+                <span>
+                  Charged {entry.amount} {info.tokenSymbol}
+                </span>
               </li>
             ))}
           </ul>
