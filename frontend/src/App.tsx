@@ -266,7 +266,7 @@ function SolanaApp() {
     <div className="app">
       <header className="wallet-bar">
         <div className="wallet-bar__title">
-          <h1>Subscribe</h1>
+          <h1>Subscription Plan</h1>
           <span className={`mode-badge ${IS_SOLANA_MAINNET_MODE ? "mode-badge--mainnet" : "mode-badge--testnet"}`}>
             {IS_SOLANA_MAINNET_MODE ? "Solana Mainnet · real funds" : "Solana Devnet"}
           </span>

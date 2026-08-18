@@ -14,8 +14,7 @@ export function WalletBar({ account, chainId, onDisconnect }: WalletBarProps) {
   return (
     <header className="wallet-bar">
       <div className="wallet-bar__title">
-        <h1>Subscribe</h1>
-        <span className="mode-badge mode-badge--mainnet">Mainnet · real funds</span>
+        <h1>Subscription Plan</h1>
       </div>
       {account && (
         <div className="wallet-bar__actions">
