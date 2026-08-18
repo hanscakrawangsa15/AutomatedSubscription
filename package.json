@@ -35,6 +35,9 @@
     "hardhat": "^2.29.0"
   },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.7",
+    "jsonwebtoken": "^9.0.2",
     "mysql2": "^3.23.3"
   }
 }

@@ -11,6 +11,12 @@ export type SubscriptionReport = {
   planId: number;
   planLabel: string;
   txHash: string;
+  // Rendered directly into the confirmation email (see server/index.js's
+  // /api/subscribers handler) — kept as pre-formatted strings so the
+  // server doesn't need its own copy of the bigint/decimals formatting
+  // logic that produced them in ConfirmSubscription.tsx.
+  amountLabel?: string;
+  intervalLabel?: string;
 };
 
 /**

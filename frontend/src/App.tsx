@@ -78,7 +78,24 @@ function App() {
     setSelectedPlan(null);
   };
 
-  const currentStep = hasSubscription ? 3 : !selectedTier ? 1 : !signer || !account ? 2 : 3;
+  // Disconnecting (or the account changing under us) clears any in-progress
+  // tier/plan selection — otherwise reconnecting with a different account
+  // later would resume mid-flow with a stale, possibly-wrong-chain choice.
+  useEffect(() => {
+    if (!signer || !account) {
+      setSelectedTier(null);
+      setSelectedPlan(null);
+      setJustSubscribed(false);
+    }
+  }, [signer, account]);
+
+  // No dedicated "connect wallet" step/page — the header's own Connect
+  // Wallet button (always visible, see WalletBar) handles that from
+  // wherever the user happens to be. hasSubscription is checked ahead of
+  // selectedTier in the render below so connecting at ANY point — even
+  // before picking a plan — jumps straight to Manage Subscription if
+  // they're already subscribed.
+  const currentStep = !selectedTier ? 1 : 2;
 
   return (
     <>
@@ -88,7 +105,13 @@ function App() {
         </a>
       </nav>
       <div className="app">
-        <WalletBar account={account} chainId={chainId} onDisconnect={disconnect} />
+        <WalletBar
+          account={account}
+          chainId={chainId}
+          onDisconnect={disconnect}
+          onConnect={connect}
+          connecting={connecting}
+        />
 
         {!ANY_CHAIN_CONFIGURED && (
           <div className="banner banner--warning">
@@ -102,8 +125,7 @@ function App() {
         {!hasSubscription && (
           <ol className="checkout-progress">
             <li className={currentStep === 1 ? "active" : currentStep > 1 ? "done" : ""}>Choose plan</li>
-            <li className={currentStep === 2 ? "active" : currentStep > 2 ? "done" : ""}>Connect wallet</li>
-            <li className={currentStep === 3 ? "active" : ""}>Confirm</li>
+            <li className={currentStep === 2 ? "active" : ""}>Confirm</li>
           </ol>
         )}
 
@@ -125,7 +147,12 @@ function App() {
             />
           ) : !signer || !account ? (
             <>
-              <ConnectWalletStep connecting={connecting} error={error} onConnect={connect} />
+              <ConnectWalletStep
+                connecting={connecting}
+                error={error}
+                onConnect={connect}
+                description="Connect your wallet to continue — we'll check whether you already have an active subscription."
+              />
               <button className="link-button" onClick={backToPlans}>
                 &larr; Back to plans
               </button>

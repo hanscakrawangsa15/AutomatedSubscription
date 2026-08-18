@@ -1,6 +1,7 @@
 require("dotenv").config();
 const hre = require("hardhat");
 const { lookupSubscriberEmail } = require("./subscribersDb");
+const { sendEmail } = require("./emailClient");
 
 const POLL_INTERVAL_MS = Number(process.env.KEEPER_POLL_MS || 10_000);
 
@@ -82,11 +83,6 @@ async function queryLogsChunked(contract, filter, fromBlock, toBlock) {
   return results;
 }
 
-const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const FROM_EMAIL = process.env.NOTIFY_FROM_EMAIL || "onboarding@resend.dev";
-
-let warnedNoApiKey = false;
-
 // Matches frontend/src/lib/chains.ts's chain_name slugs — must stay in
 // sync, since server/index.js writes rows keyed by that exact slug when a
 // subscribe() transaction confirms.
@@ -105,38 +101,14 @@ function planLabel(intervalSeconds) {
 }
 
 async function sendReceiptEmail({ to, amountLabel, plan, nextChargeAt, txHash }) {
-  if (!RESEND_API_KEY) {
-    if (!warnedNoApiKey) {
-      console.warn("RESEND_API_KEY not set — skipping email notifications (see .env.example)");
-      warnedNoApiKey = true;
-    }
-    return;
-  }
-  try {
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: FROM_EMAIL,
-        to,
-        subject: `Subscription renewed — ${amountLabel} charged`,
-        html: `<p>Your <strong>${plan}</strong> subscription was renewed.</p>
+  await sendEmail({
+    to,
+    subject: `Subscription renewed — ${amountLabel} charged`,
+    html: `<p>Your <strong>${plan}</strong> subscription was renewed.</p>
 <p><strong>Amount:</strong> ${amountLabel}</p>
 <p><strong>Next charge:</strong> ${nextChargeAt}</p>
 <p><strong>Transaction:</strong> ${txHash}</p>`,
-      }),
-    });
-    if (!res.ok) {
-      console.error(`Email send failed (${res.status}):`, await res.text());
-    } else {
-      console.log(`Email sent to ${to}`);
-    }
-  } catch (err) {
-    console.error("Email send failed:", err.message);
-  }
+  });
 }
 
 async function main() {

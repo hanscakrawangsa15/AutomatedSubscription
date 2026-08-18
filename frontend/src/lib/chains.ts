@@ -1,5 +1,5 @@
 import { defineChain } from "@reown/appkit/networks";
-import { base, mainnet, bsc } from "@reown/appkit/networks";
+import { mainnet, bsc } from "@reown/appkit/networks";
 import type { AppKitNetwork } from "@reown/appkit/networks";
 import type { Chain } from "viem";
 
@@ -30,10 +30,12 @@ function mainnetRpc(envVar: keyof ImportMetaEnv, label: string): string {
 // Base still has real deployed managers (USDC/WETH) from an earlier phase,
 // kept live and untouched — but the app moved to a USDT-only, ERC-20
 // (Ethereum) / BEP-20 (BNB Chain) payment model, so Base is no longer
-// offered as a connectable network. BASE_MAINNET stays exported (chain
-// utilities below still recognize chain 8453) in case a wallet somehow
-// ends up there, just excluded from SUPPORTED_CHAINS.
-export const BASE_MAINNET = withCaip(base, mainnetRpc("VITE_BASE_MAINNET_RPC_URL", "Base"));
+// offered as a connectable network. Deliberately NOT computed here at all
+// (unlike ETH_MAINNET/BSC_MAINNET below) — an unused chain still requiring
+// its own paid RPC key just to let the app boot is exactly the kind of
+// avoidable startup crash this bit the production build with (chain 8453
+// is still recognized by name/slug further down, just via a static id, not
+// this AppKitNetwork object).
 export const ETH_MAINNET = withCaip(mainnet, mainnetRpc("VITE_ETH_MAINNET_RPC_URL", "Ethereum Mainnet"));
 export const BSC_MAINNET = withCaip(bsc, mainnetRpc("VITE_BSC_MAINNET_RPC_URL", "BNB Chain"));
 

@@ -6,15 +6,17 @@ import { formatDuration, type PlanInfo } from "../lib/plans";
 import { EMAIL_RE, reportSubscription } from "../lib/notify";
 import { getChainSlug } from "../lib/chains";
 import { getTrafficSource, getEmailFromUrl } from "../lib/trafficSource";
+import { useToast } from "./Toast";
 
 const PLAN_LABELS: Record<string, string> = { monthly: "Monthly", yearly: "Yearly", test: "Test" };
 
-// Kept low (rather than e.g. 12) because wallet security scanners like
-// Blockaid (built into MetaMask) flag approvals that are a large multiple
-// of the immediate charge as a "deceptive request" — a real false positive
-// seen in production. A smaller ratio trades off less-frequent re-approval
-// for a much lower chance of scaring off legitimate subscribers.
-const PERIODS_TO_APPROVE = 3n;
+// Set to 12 (a full year of monthly renewals) on purpose, per a deliberate
+// call to prioritize fewer re-approval interruptions over Blockaid's
+// "deceptive request" false-positive rate — wallet security scanners flag
+// approvals that are a large multiple of the immediate charge, so this
+// *will* surface that warning more often than a lower multiplier would.
+// If that turns out to hurt conversion, dial it back down.
+const PERIODS_TO_APPROVE = 12n;
 
 type Step = "checking" | "ready" | "approving" | "subscribing" | "error";
 
@@ -52,6 +54,7 @@ export function ConfirmSubscription({
   const [emailTouched, setEmailTouched] = useState(false);
   const [notifyStatus, setNotifyStatus] = useState<"idle" | "sent" | "failed">("idle");
   const emailValid = EMAIL_RE.test(email);
+  const showToast = useToast();
 
   const managerAddress = getChainAddresses(chainId, plan.tokenSuffix)?.manager;
 
@@ -110,12 +113,17 @@ export function ConfirmSubscription({
         planId: plan.id,
         planLabel: PLAN_LABELS[plan.kind] ?? plan.kind,
         txHash: tx.hash,
+        amountLabel: `${plan.price} ${plan.tokenSymbol}`,
+        intervalLabel: `every ${formatDuration(plan.intervalSeconds)}`,
       });
       setNotifyStatus(ok ? "sent" : "failed");
 
+      showToast("success", `Subscribed! ${plan.price} ${plan.tokenSymbol} charged — you're all set.`);
       onSubscribed();
     } catch (err) {
-      setErrorMsg(formatTxError(err));
+      const message = formatTxError(err);
+      setErrorMsg(message);
+      showToast("error", message);
       setStep("ready");
     }
   };

@@ -2,6 +2,7 @@ node_modules
 artifacts
 cache
 .env
+*.pem
 server/subscribers.json
 coverage
 coverage.json

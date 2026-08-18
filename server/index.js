@@ -1,9 +1,14 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const cookieParser = require("cookie-parser");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 const mysql = require("mysql2/promise");
+const { sendEmail } = require("../scripts/emailClient");
 
 const PORT = process.env.NOTIFY_PORT || 4000;
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
@@ -36,17 +41,39 @@ function normalizeAddress(address) {
 }
 
 const app = express();
-app.use(cors());
+// credentials:true + an explicit origin (never "*") is required for the
+// admin login cookie to actually be sent back on subsequent requests —
+// ADMIN_PANEL_ORIGIN should be the exact origin the admin panel is served
+// from (e.g. https://cpay.xenorize.com), comma-separated if there's more
+// than one (e.g. a local dev origin alongside production).
+const allowedOrigins = (process.env.ADMIN_PANEL_ORIGIN || "http://localhost:5173")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json());
+app.use(cookieParser());
 
-// Upserts one subscriber row per (wallet_address, chain_name), called once a
-// subscribe() transaction confirms on-chain — plan_id/plan_label/tx_hash
-// always reflect the most recent real subscription on that chain. email and
-// traffic_source are optional/best-effort and only overwritten when a new
-// non-empty value is actually sent, so a later call with no email doesn't
-// blank out one captured earlier.
+// Best-effort confirmation email sent right after a subscribe() transaction
+// confirms — mirrors keeper.js's renewal-receipt email but fires
+// immediately instead of waiting for the keeper's next poll tick. Never
+// awaited by the caller: a slow/failed Resend call must not delay or break
+// the subscriber upsert response.
+async function sendConfirmationEmail({ to, planLabel, amountLabel, intervalLabel, txHash }) {
+  await sendEmail({
+    to,
+    subject: `Subscription confirmed${amountLabel ? ` — ${amountLabel} charged` : ""}`,
+    html: `<p>Your <strong>${planLabel || "subscription"}</strong> is now active.</p>
+${amountLabel ? `<p><strong>Amount charged:</strong> ${amountLabel}</p>` : ""}
+${intervalLabel ? `<p><strong>Billing interval:</strong> ${intervalLabel}</p>` : ""}
+${txHash ? `<p><strong>Transaction:</strong> ${txHash}</p>` : ""}
+<p>You'll get another email each time this subscription renews.</p>`,
+  });
+}
+
 app.post("/api/subscribers", async (req, res) => {
-  const { address, chainName, chainId, email, trafficSource, planId, planLabel, txHash } = req.body || {};
+  const { address, chainName, chainId, email, trafficSource, planId, planLabel, txHash, amountLabel, intervalLabel } =
+    req.body || {};
 
   const walletAddress = normalizeAddress(address);
   if (!walletAddress) {
@@ -84,6 +111,16 @@ app.post("/api/subscribers", async (req, res) => {
     );
     console.log(`Upserted subscriber ${walletAddress} on ${chainName} (plan ${planId ?? "?"}, tx ${txHash ?? "-"})`);
     res.json({ ok: true });
+
+    if (email) {
+      sendConfirmationEmail({
+        to: email,
+        planLabel: typeof planLabel === "string" ? planLabel : undefined,
+        amountLabel: typeof amountLabel === "string" ? amountLabel : undefined,
+        intervalLabel: typeof intervalLabel === "string" ? intervalLabel : undefined,
+        txHash: typeof txHash === "string" ? txHash : undefined,
+      }).catch((err) => console.error("Confirmation email failed:", err.message));
+    }
   } catch (err) {
     console.error("Failed to upsert subscriber:", err.message);
     res.status(500).json({ error: "database error" });
@@ -104,6 +141,105 @@ app.get("/api/subscribers/:chainName/:address", async (req, res) => {
     res.json({ email: rows[0]?.email || null });
   } catch (err) {
     console.error("Failed to look up subscriber:", err.message);
+    res.status(500).json({ error: "database error" });
+  }
+});
+
+// --- Admin panel: login-gated read access to the subscribers table ---
+// ADMIN_USERNAME / ADMIN_PASSWORD_HASH / ADMIN_JWT_SECRET are set in .env —
+// see scripts/hash-admin-password.js for generating the password hash
+// without ever having to share the plaintext password with anyone else.
+const ADMIN_COOKIE = "admin_token";
+const ADMIN_SESSION_HOURS = 8;
+
+function requireAdminEnv(res) {
+  if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD_HASH || !process.env.ADMIN_JWT_SECRET) {
+    res.status(503).json({ error: "Admin panel isn't configured — see scripts/hash-admin-password.js" });
+    return false;
+  }
+  return true;
+}
+
+function requireAdmin(req, res, next) {
+  const token = req.cookies?.[ADMIN_COOKIE];
+  if (!token) return res.status(401).json({ error: "not logged in" });
+  try {
+    jwt.verify(token, process.env.ADMIN_JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ error: "session expired — log in again" });
+  }
+}
+
+app.post("/api/admin/login", async (req, res) => {
+  if (!requireAdminEnv(res)) return;
+  const { username, password } = req.body || {};
+  if (typeof username !== "string" || typeof password !== "string") {
+    return res.status(400).json({ error: "username and password are required" });
+  }
+
+  // Constant-time-ish: always run bcrypt.compare even on a username
+  // mismatch, so a wrong username doesn't return measurably faster than a
+  // wrong password (avoids leaking which one was wrong via timing).
+  const usernameOk = username === process.env.ADMIN_USERNAME;
+  const passwordOk = await bcrypt.compare(password, process.env.ADMIN_PASSWORD_HASH).catch(() => false);
+  if (!usernameOk || !passwordOk) {
+    return res.status(401).json({ error: "invalid username or password" });
+  }
+
+  const token = jwt.sign({ sub: username, role: "admin" }, process.env.ADMIN_JWT_SECRET, {
+    expiresIn: `${ADMIN_SESSION_HOURS}h`,
+  });
+  res.cookie(ADMIN_COOKIE, token, {
+    httpOnly: true,
+    secure: IS_PRODUCTION,
+    sameSite: IS_PRODUCTION ? "none" : "lax",
+    maxAge: ADMIN_SESSION_HOURS * 60 * 60 * 1000,
+  });
+  res.json({ ok: true, username });
+});
+
+app.post("/api/admin/logout", (req, res) => {
+  res.clearCookie(ADMIN_COOKIE);
+  res.json({ ok: true });
+});
+
+app.get("/api/admin/me", (req, res) => {
+  const token = req.cookies?.[ADMIN_COOKIE];
+  if (!token || !process.env.ADMIN_JWT_SECRET) return res.status(401).json({ error: "not logged in" });
+  try {
+    const payload = jwt.verify(token, process.env.ADMIN_JWT_SECRET);
+    res.json({ ok: true, username: payload.sub });
+  } catch {
+    res.status(401).json({ error: "session expired" });
+  }
+});
+
+const PAGE_SIZE_DEFAULT = 50;
+const PAGE_SIZE_MAX = 200;
+
+app.get("/api/admin/subscribers", requireAdmin, async (req, res) => {
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const pageSize = Math.min(PAGE_SIZE_MAX, Math.max(1, Number(req.query.pageSize) || PAGE_SIZE_DEFAULT));
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  const offset = (page - 1) * pageSize;
+
+  try {
+    const where = search ? "WHERE wallet_address LIKE ? OR email LIKE ?" : "";
+    const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
+
+    const [rows] = await pool.query(
+      `SELECT wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash
+       FROM subscribers ${where}
+       ORDER BY wallet_address, chain_name
+       LIMIT ? OFFSET ?`,
+      [...searchParams, pageSize, offset],
+    );
+    const [countRows] = await pool.query(`SELECT COUNT(*) as total FROM subscribers ${where}`, searchParams);
+
+    res.json({ rows, total: countRows[0].total, page, pageSize });
+  } catch (err) {
+    console.error("Failed to list subscribers:", err.message);
     res.status(500).json({ error: "database error" });
   }
 });
