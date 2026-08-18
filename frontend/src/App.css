@@ -392,6 +392,12 @@ button.secondary:hover:not(:disabled) {
   margin: 0 auto;
 }
 
+/* The pricing-tiers step needs room for 2-3 cards side by side — wider
+   than the 640px that suits the narrower Connect/Confirm form steps. */
+.checkout:has(.pricing-tiers) {
+  max-width: 1040px;
+}
+
 .checkout-step {
   background: var(--color-card);
   border: 1px solid var(--color-border);
@@ -525,15 +531,22 @@ button.secondary:hover:not(:disabled) {
 }
 
 .pricing-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  display: flex;
+  flex-wrap: nowrap;
   gap: 20px;
   margin-top: 24px;
   align-items: start;
+  /* Guarantees a single left-to-right row regardless of card count (2 for
+     yearly, 3 for monthly) — on a viewport too narrow to fit them at a
+     readable width, scroll horizontally rather than wrapping to a new row. */
+  overflow-x: auto;
+  padding-bottom: 4px;
 }
 
 .pricing-card {
   position: relative;
+  flex: 1 1 240px;
+  min-width: 240px;
   background: var(--color-card);
   border: 1px solid var(--color-border);
   border-radius: 16px;
