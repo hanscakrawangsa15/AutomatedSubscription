@@ -7,6 +7,7 @@ import { EMAIL_RE, reportSubscription } from "../lib/notify";
 import { getChainSlug } from "../lib/chains";
 import { getTrafficSource, getEmailFromUrl } from "../lib/trafficSource";
 import { useToast } from "./Toast";
+import { waitForTx } from "../lib/waitForTx";
 
 const PLAN_LABELS: Record<string, string> = { monthly: "Monthly", yearly: "Yearly", test: "Test" };
 
@@ -93,16 +94,16 @@ export function ConfirmSubscription({
         const usdc = getMockUsdc(signer, chainId, plan.tokenSuffix);
         if (needsReset) {
           const resetTx = await usdc.approve(managerAddress, 0n);
-          await resetTx.wait();
+          await waitForTx(resetTx, chainId);
         }
         const tx = await usdc.approve(managerAddress, plan.priceRaw * PERIODS_TO_APPROVE);
-        await tx.wait();
+        await waitForTx(tx, chainId);
       }
 
       setStep("subscribing");
       const manager = getSubscriptionManager(signer, chainId, plan.tokenSuffix);
       const tx = await manager.subscribe(plan.id);
-      await tx.wait();
+      await waitForTx(tx, chainId);
       // periodsPaid is a lifetime counter on the contract (persists across
       // cancel -> resubscribe cycles), so it isn't necessarily 1 here —
       // read the real value rather than assume.

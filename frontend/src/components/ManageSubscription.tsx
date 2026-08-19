@@ -7,6 +7,7 @@ import { useTxStatus } from "../hooks/useTxStatus";
 import { useRenewalLog } from "../hooks/useRenewalLog";
 import { reportSubscription } from "../lib/notify";
 import { getChainSlug } from "../lib/chains";
+import { waitForTx } from "../lib/waitForTx";
 
 const PLAN_LABELS: Record<string, string> = { monthly: "Monthly", yearly: "Yearly", test: "Test" };
 
@@ -96,7 +97,7 @@ export function ManageSubscription({
       const currentInfo = info;
       const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
       const tx = await manager.cancel();
-      await tx.wait();
+      await waitForTx(tx, chainId);
       // periodsPaid/nextChargeAt/renewalResult omitted on purpose — cancel()
       // doesn't touch them on-chain, and the server preserves whatever was
       // already stored for fields it isn't given.
@@ -146,7 +147,7 @@ export function ManageSubscription({
     run(async () => {
       const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
       const tx = await manager.payNow();
-      await tx.wait();
+      await waitForTx(tx, chainId);
       await syncRenewalInfo(manager, tx.hash);
       await load();
       onChanged();
@@ -156,7 +157,7 @@ export function ManageSubscription({
     run(async () => {
       const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
       const tx = await manager.retryCharge(account);
-      await tx.wait();
+      await waitForTx(tx, chainId);
       await syncRenewalInfo(manager, tx.hash);
       await load();
       onChanged();
