@@ -131,7 +131,7 @@ export function ConfirmSubscription({
       showToast("success", `Subscribed! ${plan.price} ${plan.tokenSymbol} charged — you're all set.`);
       onSubscribed();
     } catch (err) {
-      const message = formatTxError(err);
+      const message = formatTxError(err, "Confirm & Subscribe");
       setErrorMsg(message);
       showToast("error", message);
       setStep("ready");

@@ -50,7 +50,7 @@ export function ManageSubscription({
 }: ManageSubscriptionProps) {
   const [info, setInfo] = useState<SubInfo | null>(null);
   const [walletBalance, setWalletBalance] = useState<string | null>(null);
-  const { status, run } = useTxStatus();
+  const { status, errorMessage, run } = useTxStatus();
   const renewalLog = useRenewalLog(account, chainId, tokenSuffix);
 
   const load = useCallback(async () => {
@@ -113,7 +113,7 @@ export function ManageSubscription({
       }
       await load();
       onChanged();
-    });
+    }, "Cancel Subscription");
 
   // Both payNow() and retryCharge() advance the contract's lifetime
   // periodsPaid/nextChargeAt fields just like a keeper-triggered renewal
@@ -150,7 +150,7 @@ export function ManageSubscription({
       await syncRenewalInfo(manager, tx.hash);
       await load();
       onChanged();
-    });
+    }, "Pay Now");
 
   const retryCharge = () =>
     run(async () => {
@@ -160,7 +160,7 @@ export function ManageSubscription({
       await syncRenewalInfo(manager, tx.hash);
       await load();
       onChanged();
-    });
+    }, "Retry Charge");
 
   if (!info) return <p className="muted">Loading your subscription...</p>;
 
@@ -252,7 +252,7 @@ export function ManageSubscription({
         )}
       </div>
 
-      {status === "error" && <p className="error">Transaction failed. See console for details.</p>}
+      {status === "error" && <p className="error">{errorMessage ?? "Transaction failed. See console for details."}</p>}
     </section>
   );
 }

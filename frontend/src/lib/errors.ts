@@ -1,7 +1,10 @@
-export function formatTxError(err: unknown): string {
+// actionLabel names the button to point back to in the "you rejected it"
+// message — defaults to a neutral phrase since this is shared across very
+// different screens (Confirm & Subscribe, Cancel Subscription, Pay Now...).
+export function formatTxError(err: unknown, actionLabel = "try again"): string {
   const code = (err as { code?: string })?.code;
   if (code === "ACTION_REJECTED") {
-    return "You rejected the request in your wallet. Nothing happened — click Confirm & Subscribe to try again.";
+    return `You rejected the request in your wallet. Nothing happened — click ${actionLabel} to try again.`;
   }
 
   const message = err instanceof Error ? err.message : String(err);
@@ -20,7 +23,7 @@ export function formatTxError(err: unknown): string {
     return "Couldn't reach the contract on this network. Make sure your wallet is on the correct chain.";
   }
   if (lower.includes("confirmation declined") || lower.includes("user rejected") || lower.includes("user denied")) {
-    return "You rejected the request in your wallet. Nothing happened — click Confirm & Subscribe to try again.";
+    return `You rejected the request in your wallet. Nothing happened — click ${actionLabel} to try again.`;
   }
 
   return message;
