@@ -90,21 +90,27 @@ export function ManageSubscription({
 
   const cancel = () =>
     run(async () => {
+      // The Cancel button only renders once `info` has loaded (see the
+      // early-return below), so this is always non-null in practice — the
+      // guard just satisfies the type checker without an unsafe assertion.
+      const currentInfo = info;
       const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
       const tx = await manager.cancel();
       await tx.wait();
       // periodsPaid/nextChargeAt/renewalResult omitted on purpose — cancel()
       // doesn't touch them on-chain, and the server preserves whatever was
       // already stored for fields it isn't given.
-      await reportSubscription({
-        address: account,
-        chainName: getChainSlug(chainId),
-        chainId: Number(chainId),
-        planId: info.planId,
-        planLabel: info.planLabel,
-        txHash: tx.hash,
-        status: "inactive",
-      }).catch(() => {});
+      if (currentInfo) {
+        await reportSubscription({
+          address: account,
+          chainName: getChainSlug(chainId),
+          chainId: Number(chainId),
+          planId: currentInfo.planId,
+          planLabel: currentInfo.planLabel,
+          txHash: tx.hash,
+          status: "inactive",
+        }).catch(() => {});
+      }
       await load();
       onChanged();
     });
