@@ -35,7 +35,8 @@ export async function adminLogin(username: string, password: string): Promise<{ 
     headers: { "Content-Type": "application/json" },
     credentials: "include",
     body: JSON.stringify({ username, password }),
-  });
+  }).catch(() => null);
+  if (!res) return { ok: false, error: "Couldn't reach the server. Is it running?" };
   if (res.ok) return { ok: true };
   const body = await parseJson(res);
   return { ok: false, error: body?.error || `Login failed (${res.status})` };

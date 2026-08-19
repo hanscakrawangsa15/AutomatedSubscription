@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import "./App.css";
 import { adminLogin, adminLogout, adminMe, adminFetchSubscribers, type SubscriberRow } from "./lib/adminApi";
+import { useToast } from "./components/Toast";
 
 const PAGE_SIZE = 50;
 
@@ -19,6 +20,7 @@ function LoginForm({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const showToast = useToast();
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,8 +28,13 @@ function LoginForm({ onLoggedIn }: { onLoggedIn: () => void }) {
     setError(null);
     const result = await adminLogin(username, password);
     setBusy(false);
-    if (result.ok) onLoggedIn();
-    else setError(result.error ?? "Login failed");
+    if (result.ok) {
+      onLoggedIn();
+    } else {
+      const message = result.error ?? "Login failed";
+      setError(message);
+      showToast("error", message);
+    }
   };
 
   return (
