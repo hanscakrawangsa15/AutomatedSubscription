@@ -150,7 +150,7 @@ app.get("/api/subscribers/:chainName/:address", async (req, res) => {
 // see scripts/hash-admin-password.js for generating the password hash
 // without ever having to share the plaintext password with anyone else.
 const ADMIN_COOKIE = "admin_token";
-const ADMIN_SESSION_HOURS = 8;
+const ADMIN_SESSION_MINUTES = 30;
 
 function requireAdminEnv(res) {
   if (!process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD_HASH || !process.env.ADMIN_JWT_SECRET) {
@@ -188,13 +188,13 @@ app.post("/api/admin/login", async (req, res) => {
   }
 
   const token = jwt.sign({ sub: username, role: "admin" }, process.env.ADMIN_JWT_SECRET, {
-    expiresIn: `${ADMIN_SESSION_HOURS}h`,
+    expiresIn: `${ADMIN_SESSION_MINUTES}m`,
   });
   res.cookie(ADMIN_COOKIE, token, {
     httpOnly: true,
     secure: IS_PRODUCTION,
     sameSite: IS_PRODUCTION ? "none" : "lax",
-    maxAge: ADMIN_SESSION_HOURS * 60 * 60 * 1000,
+    maxAge: ADMIN_SESSION_MINUTES * 60 * 1000,
   });
   res.json({ ok: true, username });
 });

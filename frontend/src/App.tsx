@@ -18,7 +18,7 @@ const OVERDUE = 2;
 const ANY_CHAIN_CONFIGURED = SUPPORTED_CHAINS.some((c) => isChainDeployed(Number(c.id)));
 
 function App() {
-  const { signer, account, chainId, connecting, error, connect, disconnect } = useAppKitWallet();
+  const { signer, account, chainId, connecting, reconnecting, error, connect, disconnect } = useAppKitWallet();
   const [refreshKey, setRefreshKey] = useState(0);
   // The user's *intent* (which tier + billing cycle) — chain-agnostic, since
   // every payment network carries the exact same USDT-priced plan set. The
@@ -89,12 +89,14 @@ function App() {
     }
   }, [signer, account]);
 
-  // No dedicated "connect wallet" step/page — the header's own Connect
-  // Wallet button (always visible, see WalletBar) handles that from
-  // wherever the user happens to be. hasSubscription is checked ahead of
-  // selectedTier in the render below so connecting at ANY point — even
-  // before picking a plan — jumps straight to Manage Subscription if
-  // they're already subscribed.
+  // Wallet connection gates everything else — a first-time visitor (no
+  // prior session) must connect before they can even see pricing, since
+  // that's the only way to know whether they already have a subscription.
+  // Returning subscribers never notice this gate in practice: AppKit
+  // silently restores their session on load (surfaced here as
+  // `reconnecting`), so by the time this renders they're already
+  // `signer && account` and land straight on Manage Subscription via the
+  // hasSubscription check below.
   const currentStep = !selectedTier ? 1 : 2;
 
   return (
@@ -130,7 +132,20 @@ function App() {
         )}
 
         <main className="checkout">
-          {hasSubscription && signer && account && chainId !== null ? (
+          {!signer || !account ? (
+            reconnecting ? (
+              <section className="checkout-step">
+                <p className="muted">Reconnecting your wallet...</p>
+              </section>
+            ) : (
+              <ConnectWalletStep
+                connecting={connecting}
+                error={error}
+                onConnect={connect}
+                description="Connect your wallet to see pricing and check whether you already have an active subscription."
+              />
+            )
+          ) : hasSubscription && chainId !== null ? (
             <ManageSubscription
               signer={signer}
               account={account}
@@ -145,18 +160,6 @@ function App() {
               refreshKey={refreshKey}
               onSelect={(_plan, tierId, cycle) => setSelectedTier({ tierId, cycle })}
             />
-          ) : !signer || !account ? (
-            <>
-              <ConnectWalletStep
-                connecting={connecting}
-                error={error}
-                onConnect={connect}
-                description="Connect your wallet to continue — we'll check whether you already have an active subscription."
-              />
-              <button className="link-button" onClick={backToPlans}>
-                &larr; Back to plans
-              </button>
-            </>
           ) : !selectedPlan ? (
             <PaymentNetworkStep
               tierId={selectedTier.tierId}

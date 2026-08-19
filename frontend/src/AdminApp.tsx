@@ -5,6 +5,11 @@ import { useToast } from "./components/Toast";
 
 const PAGE_SIZE = 50;
 
+// Matches server/index.js's ADMIN_SESSION_MINUTES — the cookie/JWT are
+// already invalid server-side by this point, this just makes the UI notice
+// on its own instead of only discovering it next time a request 401s.
+const ADMIN_SESSION_MS = 30 * 60 * 1000;
+
 const EXPLORER_TX_BASE: Record<string, string> = {
   "ethereum-mainnet": "https://etherscan.io/tx/",
   "bnb-mainnet": "https://bscscan.com/tx/",
@@ -15,7 +20,7 @@ function short(value: string, head = 6, tail = 4): string {
   return value.length > head + tail + 3 ? `${value.slice(0, head)}...${value.slice(-tail)}` : value;
 }
 
-function LoginForm({ onLoggedIn }: { onLoggedIn: () => void }) {
+function LoginForm({ onLoggedIn, notice }: { onLoggedIn: () => void; notice?: string | null }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +45,7 @@ function LoginForm({ onLoggedIn }: { onLoggedIn: () => void }) {
   return (
     <section className="checkout-step" style={{ maxWidth: 380, margin: "60px auto" }}>
       <h2>Admin login</h2>
+      {notice && <p className="muted">{notice}</p>}
       <form onSubmit={submit}>
         <label className="field-label" htmlFor="admin-username">
           Username
@@ -191,6 +197,7 @@ function SubscribersTable({ onLoggedOut }: { onLoggedOut: () => void }) {
 export function AdminApp() {
   const [checking, setChecking] = useState(true);
   const [loggedIn, setLoggedIn] = useState(false);
+  const [loggedOutNotice, setLoggedOutNotice] = useState<string | null>(null);
 
   useEffect(() => {
     adminMe().then((result) => {
@@ -198,6 +205,22 @@ export function AdminApp() {
       setChecking(false);
     });
   }, []);
+
+  // Proactively bounces back to the login screen once the session's 30
+  // minutes are up, instead of waiting for the admin to take an action that
+  // 401s first (server/index.js's ADMIN_SESSION_MINUTES already invalidates
+  // the cookie/JWT server-side by this point — this just makes the UI
+  // notice on its own).
+  useEffect(() => {
+    if (!loggedIn) return;
+    const timer = setTimeout(() => {
+      adminLogout().finally(() => {
+        setLoggedIn(false);
+        setLoggedOutNotice("You were logged out after 30 minutes — please log in again.");
+      });
+    }, ADMIN_SESSION_MS);
+    return () => clearTimeout(timer);
+  }, [loggedIn]);
 
   return (
     <div className="app">
@@ -210,9 +233,20 @@ export function AdminApp() {
         {checking ? (
           <p className="muted centered">Checking session...</p>
         ) : loggedIn ? (
-          <SubscribersTable onLoggedOut={() => setLoggedIn(false)} />
+          <SubscribersTable
+            onLoggedOut={() => {
+              setLoggedIn(false);
+              setLoggedOutNotice(null);
+            }}
+          />
         ) : (
-          <LoginForm onLoggedIn={() => setLoggedIn(true)} />
+          <LoginForm
+            notice={loggedOutNotice}
+            onLoggedIn={() => {
+              setLoggedOutNotice(null);
+              setLoggedIn(true);
+            }}
+          />
         )}
       </main>
     </div>

@@ -11,7 +11,7 @@ import { appKit } from "../lib/appkit";
  */
 export function useAppKitWallet() {
   const { open } = useAppKit();
-  const { address, isConnected } = useAppKitAccount();
+  const { address, isConnected, status } = useAppKitAccount();
   const { chainId: rawChainId } = useAppKitNetwork();
   const { walletProvider } = useAppKitProvider<Eip1193Provider>("eip155");
   const { disconnect: disconnectAppKit } = useDisconnect();
@@ -88,6 +88,12 @@ export function useAppKitWallet() {
     account: locallyDisconnected ? null : (address ?? null),
     chainId: locallyDisconnected ? null : rawChainId !== undefined ? BigInt(rawChainId) : null,
     connecting,
+    // AppKit silently restores a previously-connected session (WalletConnect
+    // pairing or an already-authorized injected wallet) on page load — this
+    // exposes that in-progress restoration so the UI can show a quiet
+    // loading state instead of flashing "Connect your wallet" at a returning
+    // subscriber for the brief moment before their session comes back.
+    reconnecting: !locallyDisconnected && (status === "reconnecting" || status === "connecting"),
     error,
     connect,
     disconnect,
