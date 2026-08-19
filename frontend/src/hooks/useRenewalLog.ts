@@ -16,7 +16,15 @@ const MAX_ENTRIES = 8;
 // chain but hard-fails on a real testnet with millions of blocks. Query a
 // bounded recent window instead, shrinking it if the provider's own cap is
 // even stricter than our default guess.
-const DEFAULT_LOOKBACK_BLOCKS = 10_000;
+//
+// Sized in block *count*, but what actually matters is wall-clock coverage
+// — and block time varies a lot per chain (BSC ~3s vs Ethereum ~12s). A
+// fixed 10k blocks is only ~1.5h of BSC history, so an hourly-renewing
+// subscription (e.g. the Test plan) would silently lose older entries from
+// this log within a couple of hours even though they charged successfully
+// on-chain. 500k covers well over a week on the fastest chain here, and the
+// shrink-on-failure loop below still protects against a stricter provider.
+const DEFAULT_LOOKBACK_BLOCKS = 500_000;
 
 async function queryRecentCharges(
   provider: ReturnType<typeof getReadProvider>,
