@@ -32,17 +32,20 @@ async function lookupSubscriberEmail(walletAddress, chainName) {
   return rows[0]?.email || null;
 }
 
-// Called by the keeper right after a successful chargeDue/retryCharge —
-// periodsPaid and nextChargeAt are read straight off the just-updated
-// on-chain Subscription struct (see keeper.js), so this always reflects the
-// contract's own state rather than a separately-maintained value that could
-// drift out of sync with it. A no-op (0 rows affected) if the row doesn't
-// exist yet, which is fine — it's only ever expected to already exist,
-// written by server/index.js's /api/subscribers on the initial subscribe.
-async function updateRenewalInfo(walletAddress, chainName, periodsPaid, nextChargeAtSeconds) {
+// Called by the keeper after every chargeDue/retryCharge/expireOverdue
+// attempt — every field here is read straight off the on-chain
+// Subscription struct (or derived from it, see keeper.js), so this always
+// reflects the contract's own state rather than a separately-maintained
+// value that could drift out of sync with it. A no-op (0 rows affected) if
+// the row doesn't exist yet, which is fine — it's only ever expected to
+// already exist, written by server/index.js's /api/subscribers on the
+// initial subscribe.
+async function updateRenewalInfo(walletAddress, chainName, { periodsPaid, nextChargeAtSeconds, status, renewalResult }) {
   await getPool().query(
-    "UPDATE subscribers SET periods_paid = ?, next_charge_at = FROM_UNIXTIME(?) WHERE wallet_address = ? AND chain_name = ?",
-    [periodsPaid, nextChargeAtSeconds, walletAddress, chainName],
+    `UPDATE subscribers
+       SET periods_paid = ?, next_charge_at = FROM_UNIXTIME(?), status = ?, last_renewal_result = ?
+     WHERE wallet_address = ? AND chain_name = ?`,
+    [periodsPaid, nextChargeAtSeconds, status, renewalResult, walletAddress, chainName],
   );
 }
 

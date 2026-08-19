@@ -93,6 +93,18 @@ export function ManageSubscription({
       const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
       const tx = await manager.cancel();
       await tx.wait();
+      // periodsPaid/nextChargeAt/renewalResult omitted on purpose — cancel()
+      // doesn't touch them on-chain, and the server preserves whatever was
+      // already stored for fields it isn't given.
+      await reportSubscription({
+        address: account,
+        chainName: getChainSlug(chainId),
+        chainId: Number(chainId),
+        planId: info.planId,
+        planLabel: info.planLabel,
+        txHash: tx.hash,
+        status: "inactive",
+      }).catch(() => {});
       await load();
       onChanged();
     });
@@ -102,8 +114,11 @@ export function ManageSubscription({
   // does — synced to the subscribers table the same way so the admin
   // panel stays accurate regardless of which path produced the charge.
   // Best-effort: a failed sync here never blocks the tx itself, which has
-  // already gone through by this point.
-  const syncPeriodsPaid = async (manager: ReturnType<typeof getSubscriptionManager>, txHash: string) => {
+  // already gone through by this point. Unlike the keeper's chargeDue path,
+  // both of these contract functions revert outright on insufficient
+  // allowance/balance rather than silently degrading — reaching this line
+  // always means the charge genuinely succeeded.
+  const syncRenewalInfo = async (manager: ReturnType<typeof getSubscriptionManager>, txHash: string) => {
     const sub = await manager.subscriptions(account);
     const plan = await manager.plans(sub.planId);
     const kind = classifyInterval(Number(plan.interval) / 86400);
@@ -116,6 +131,8 @@ export function ManageSubscription({
       txHash,
       periodsPaid: Number(sub.periodsPaid),
       nextChargeAt: Number(sub.nextChargeAt),
+      status: "active",
+      renewalResult: "success",
     }).catch(() => {});
   };
 
@@ -124,7 +141,7 @@ export function ManageSubscription({
       const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
       const tx = await manager.payNow();
       await tx.wait();
-      await syncPeriodsPaid(manager, tx.hash);
+      await syncRenewalInfo(manager, tx.hash);
       await load();
       onChanged();
     });
@@ -134,7 +151,7 @@ export function ManageSubscription({
       const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
       const tx = await manager.retryCharge(account);
       await tx.wait();
-      await syncPeriodsPaid(manager, tx.hash);
+      await syncRenewalInfo(manager, tx.hash);
       await load();
       onChanged();
     });

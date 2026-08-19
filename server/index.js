@@ -29,6 +29,15 @@ const SOLANA_ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 // never user input from a URL — validated anyway since it's still request body.
 const CHAIN_NAME_RE = /^[a-z0-9-]{1,50}$/;
 
+// Mirrors the contract's Status enum (Inactive/Active/Overdue/Expired),
+// lowercased for admin-panel readability — see SubscriptionManager.sol.
+const SUBSCRIPTION_STATUSES = ["active", "overdue", "expired", "inactive"];
+// Whether the most recent renewal *attempt* actually moved funds
+// (chargeDue/retryCharge can succeed as a transaction while still failing
+// to charge — see chargeDue's insufficient-allowance/balance branch, which
+// marks Overdue instead of reverting).
+const RENEWAL_RESULTS = ["success", "failed"];
+
 // Returns the canonical storage key for a wallet address, or null if the
 // address matches no known chain's format. EVM addresses are
 // case-insensitive so we normalize to lowercase; Solana addresses are
@@ -85,6 +94,8 @@ app.post("/api/subscribers", async (req, res) => {
     intervalLabel,
     periodsPaid,
     nextChargeAt,
+    status,
+    renewalResult,
   } = req.body || {};
 
   const walletAddress = normalizeAddress(address);
@@ -103,12 +114,18 @@ app.post("/api/subscribers", async (req, res) => {
   if (nextChargeAt !== undefined && nextChargeAt !== null && !Number.isInteger(nextChargeAt)) {
     return res.status(400).json({ error: "invalid nextChargeAt" });
   }
+  if (status !== undefined && status !== null && !SUBSCRIPTION_STATUSES.includes(status)) {
+    return res.status(400).json({ error: "invalid status" });
+  }
+  if (renewalResult !== undefined && renewalResult !== null && !RENEWAL_RESULTS.includes(renewalResult)) {
+    return res.status(400).json({ error: "invalid renewalResult" });
+  }
 
   try {
     await pool.query(
       `INSERT INTO subscribers
-         (wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash, periods_paid, next_charge_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?))
+         (wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, status, last_renewal_result)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?)
        ON DUPLICATE KEY UPDATE
          chain_id = VALUES(chain_id),
          email = COALESCE(NULLIF(VALUES(email), ''), email),
@@ -117,7 +134,9 @@ app.post("/api/subscribers", async (req, res) => {
          plan_label = VALUES(plan_label),
          tx_hash = VALUES(tx_hash),
          periods_paid = COALESCE(?, periods_paid),
-         next_charge_at = COALESCE(FROM_UNIXTIME(?), next_charge_at)`,
+         next_charge_at = COALESCE(FROM_UNIXTIME(?), next_charge_at),
+         status = COALESCE(?, status),
+         last_renewal_result = COALESCE(?, last_renewal_result)`,
       [
         walletAddress,
         chainName,
@@ -129,8 +148,12 @@ app.post("/api/subscribers", async (req, res) => {
         txHash ?? null,
         periodsPaid ?? 1,
         nextChargeAt ?? null,
+        status ?? "active",
+        renewalResult ?? "success",
         periodsPaid ?? null,
         nextChargeAt ?? null,
+        status ?? null,
+        renewalResult ?? null,
       ],
     );
     console.log(`Upserted subscriber ${walletAddress} on ${chainName} (plan ${planId ?? "?"}, tx ${txHash ?? "-"})`);
@@ -253,7 +276,7 @@ app.get("/api/admin/subscribers", requireAdmin, async (req, res) => {
     const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
 
     const [rows] = await pool.query(
-      `SELECT wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash, periods_paid, next_charge_at
+      `SELECT wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, status, last_renewal_result
        FROM subscribers ${where}
        ORDER BY wallet_address, chain_name
        LIMIT ? OFFSET ?`,

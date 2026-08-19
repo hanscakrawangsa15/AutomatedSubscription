@@ -20,6 +20,32 @@ function short(value: string, head = 6, tail = 4): string {
   return value.length > head + tail + 3 ? `${value.slice(0, head)}...${value.slice(-tail)}` : value;
 }
 
+const STATUS_COLORS: Record<string, string> = {
+  active: "#1a7f37",
+  overdue: "#b45309",
+  expired: "#6b6f7b",
+  inactive: "#6b6f7b",
+};
+
+function statusBadge(status: SubscriberRow["status"]) {
+  if (!status) return "—";
+  return (
+    <span style={{ color: STATUS_COLORS[status] ?? "inherit", fontWeight: 600, textTransform: "capitalize" }}>
+      {status}
+    </span>
+  );
+}
+
+function renewalResultBadge(result: SubscriberRow["last_renewal_result"]) {
+  if (!result) return "—";
+  const color = result === "success" ? "#1a7f37" : "#c0392b";
+  return (
+    <span style={{ color, fontWeight: 600, textTransform: "capitalize" }} title="Whether the most recent charge attempt actually moved funds">
+      {result}
+    </span>
+  );
+}
+
 function LoginForm({ onLoggedIn, notice }: { onLoggedIn: () => void; notice?: string | null }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -145,7 +171,9 @@ function SubscribersTable({ onLoggedOut }: { onLoggedOut: () => void }) {
                 <th>Chain</th>
                 <th>Email</th>
                 <th>Plan</th>
+                <th>Status</th>
                 <th>Renewals</th>
+                <th>Last renewal</th>
                 <th>Next charge</th>
                 <th>Traffic source</th>
                 <th>Tx</th>
@@ -160,9 +188,11 @@ function SubscribersTable({ onLoggedOut }: { onLoggedOut: () => void }) {
                   <td>
                     {r.plan_label ?? "—"} {r.plan_id !== null ? `(#${r.plan_id})` : ""}
                   </td>
+                  <td>{statusBadge(r.status)}</td>
                   <td title="Total successful charges, including the initial subscribe">
                     {r.periods_paid ?? 1}
                   </td>
+                  <td>{renewalResultBadge(r.last_renewal_result)}</td>
                   <td>{r.next_charge_at ? new Date(r.next_charge_at).toLocaleString() : "—"}</td>
                   <td>{r.traffic_source ?? "—"}</td>
                   <td>

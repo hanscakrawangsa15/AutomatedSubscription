@@ -174,15 +174,27 @@ async function main() {
 
   const chainName = chainNameFor(chainId);
 
-  const notifyIfRegistered = async (user, sub, txHash) => {
-    // Kept independent of the email lookup below (which can legitimately
-    // find nothing) — the renewal count should still land even if email
-    // notification isn't possible for this subscriber.
-    await updateRenewalInfo(user.toLowerCase(), chainName, Number(sub.periodsPaid), Number(sub.nextChargeAt)).catch(
-      (err) => {
-        console.warn(`renewal info update failed for ${user}: ${err.message}`);
-      },
-    );
+  // Mirrors the contract's Status enum — see server/index.js's
+  // SUBSCRIPTION_STATUSES for the admin-panel-facing side of this mapping.
+  const STATUS_LABELS = { 0: "inactive", 1: "active", 2: "overdue", 3: "expired" };
+
+  // Always reflects the contract's current truth into the DB, independent
+  // of whether email notification is possible for this subscriber (see
+  // notifyIfRegistered below, which wraps this for the two paths that also
+  // send a receipt).
+  const syncRenewalInfo = async (user, sub, renewalResult) => {
+    await updateRenewalInfo(user.toLowerCase(), chainName, {
+      periodsPaid: Number(sub.periodsPaid),
+      nextChargeAtSeconds: Number(sub.nextChargeAt),
+      status: STATUS_LABELS[Number(sub.status)] ?? null,
+      renewalResult,
+    }).catch((err) => {
+      console.warn(`renewal info update failed for ${user}: ${err.message}`);
+    });
+  };
+
+  const notifyIfRegistered = async (user, sub, txHash, renewalResult) => {
+    await syncRenewalInfo(user, sub, renewalResult);
 
     const email = await lookupSubscriberEmail(user.toLowerCase(), chainName).catch((err) => {
       console.warn(`Subscriber email lookup failed for ${user}: ${err.message}`);
@@ -213,21 +225,31 @@ async function main() {
           await tx.wait();
           console.log(`[${time}] chargeDue(${user}) OK`);
           const updated = await manager.subscriptions(user);
-          await notifyIfRegistered(user, updated, tx.hash);
+          // chargeDue never reverts on insufficient allowance/balance — it
+          // silently marks Overdue instead (see the contract) — so a
+          // non-reverting tx here does NOT necessarily mean money moved.
+          // The resulting status is the only reliable signal.
+          const renewalResult = Number(updated.status) === 1 ? "success" : "failed";
+          await notifyIfRegistered(user, updated, tx.hash, renewalResult);
         } else if (status === 2) {
           try {
             const tx = await manager.retryCharge(user);
             await tx.wait();
             console.log(`[${time}] retryCharge(${user}) OK`);
             const updated = await manager.subscriptions(user);
-            await notifyIfRegistered(user, updated, tx.hash);
+            await notifyIfRegistered(user, updated, tx.hash, "success");
           } catch {
+            // retryCharge reverts outright on failure (unlike chargeDue) —
+            // reaching here means still insufficient allowance/balance.
+            await syncRenewalInfo(user, sub, "failed");
             const plan = await manager.plans(sub.planId);
             const block = await hre.ethers.provider.getBlock("latest");
             if (block.timestamp >= Number(sub.overdueSince) + Number(plan.gracePeriod)) {
               const tx = await manager.expireOverdue(user);
               await tx.wait();
               console.log(`[${time}] expireOverdue(${user}) OK`);
+              const updated = await manager.subscriptions(user);
+              await syncRenewalInfo(user, updated, "failed");
             }
           }
         }

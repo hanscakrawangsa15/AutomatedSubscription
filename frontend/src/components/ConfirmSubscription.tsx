@@ -121,6 +121,10 @@ export function ConfirmSubscription({
         intervalLabel: `every ${formatDuration(plan.intervalSeconds)}`,
         periodsPaid: Number(sub.periodsPaid),
         nextChargeAt: Number(sub.nextChargeAt),
+        // subscribe() always either transfers the first period's payment or
+        // reverts entirely — reaching this line means it succeeded.
+        status: "active",
+        renewalResult: "success",
       });
       setNotifyStatus(ok ? "sent" : "failed");
 

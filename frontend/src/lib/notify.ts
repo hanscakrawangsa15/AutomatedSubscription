@@ -26,6 +26,14 @@ export type SubscriptionReport = {
   // nextChargeAt as unix seconds (Subscription.nextChargeAt) — same
   // "read fresh off-chain" reasoning as periodsPaid above.
   nextChargeAt?: number;
+  // Mirrors the contract's Status enum, lowercased — see server/index.js's
+  // SUBSCRIPTION_STATUSES for the accepted values.
+  status?: "active" | "overdue" | "expired" | "inactive";
+  // Whether the action that triggered this report actually moved funds —
+  // distinct from "did the transaction succeed", since e.g. chargeDue can
+  // succeed as a transaction while still failing to charge (see the
+  // contract's insufficient-allowance/balance branch).
+  renewalResult?: "success" | "failed";
 };
 
 /**

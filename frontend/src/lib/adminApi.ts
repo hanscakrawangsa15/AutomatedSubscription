@@ -13,6 +13,8 @@ export type SubscriberRow = {
   // mysql2 returns DATETIME columns as JS Date objects; Express's
   // res.json() then serializes them to ISO 8601 UTC strings.
   next_charge_at: string | null;
+  status: "active" | "overdue" | "expired" | "inactive" | null;
+  last_renewal_result: "success" | "failed" | null;
 };
 
 export type SubscribersPage = {
