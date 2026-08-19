@@ -32,4 +32,18 @@ async function lookupSubscriberEmail(walletAddress, chainName) {
   return rows[0]?.email || null;
 }
 
-module.exports = { lookupSubscriberEmail };
+// Called by the keeper right after a successful chargeDue/retryCharge —
+// periodsPaid and nextChargeAt are read straight off the just-updated
+// on-chain Subscription struct (see keeper.js), so this always reflects the
+// contract's own state rather than a separately-maintained value that could
+// drift out of sync with it. A no-op (0 rows affected) if the row doesn't
+// exist yet, which is fine — it's only ever expected to already exist,
+// written by server/index.js's /api/subscribers on the initial subscribe.
+async function updateRenewalInfo(walletAddress, chainName, periodsPaid, nextChargeAtSeconds) {
+  await getPool().query(
+    "UPDATE subscribers SET periods_paid = ?, next_charge_at = FROM_UNIXTIME(?) WHERE wallet_address = ? AND chain_name = ?",
+    [periodsPaid, nextChargeAtSeconds, walletAddress, chainName],
+  );
+}
+
+module.exports = { lookupSubscriberEmail, updateRenewalInfo };

@@ -103,6 +103,10 @@ export function ConfirmSubscription({
       const manager = getSubscriptionManager(signer, chainId, plan.tokenSuffix);
       const tx = await manager.subscribe(plan.id);
       await tx.wait();
+      // periodsPaid is a lifetime counter on the contract (persists across
+      // cancel -> resubscribe cycles), so it isn't necessarily 1 here —
+      // read the real value rather than assume.
+      const sub = await manager.subscriptions(account);
 
       const ok = await reportSubscription({
         address: account,
@@ -115,6 +119,8 @@ export function ConfirmSubscription({
         txHash: tx.hash,
         amountLabel: `${plan.price} ${plan.tokenSymbol}`,
         intervalLabel: `every ${formatDuration(plan.intervalSeconds)}`,
+        periodsPaid: Number(sub.periodsPaid),
+        nextChargeAt: Number(sub.nextChargeAt),
       });
       setNotifyStatus(ok ? "sent" : "failed");
 

@@ -1,6 +1,6 @@
 require("dotenv").config();
 const hre = require("hardhat");
-const { lookupSubscriberEmail } = require("./subscribersDb");
+const { lookupSubscriberEmail, updateRenewalInfo } = require("./subscribersDb");
 const { sendEmail } = require("./emailClient");
 
 const POLL_INTERVAL_MS = Number(process.env.KEEPER_POLL_MS || 10_000);
@@ -175,6 +175,15 @@ async function main() {
   const chainName = chainNameFor(chainId);
 
   const notifyIfRegistered = async (user, sub, txHash) => {
+    // Kept independent of the email lookup below (which can legitimately
+    // find nothing) — the renewal count should still land even if email
+    // notification isn't possible for this subscriber.
+    await updateRenewalInfo(user.toLowerCase(), chainName, Number(sub.periodsPaid), Number(sub.nextChargeAt)).catch(
+      (err) => {
+        console.warn(`renewal info update failed for ${user}: ${err.message}`);
+      },
+    );
+
     const email = await lookupSubscriberEmail(user.toLowerCase(), chainName).catch((err) => {
       console.warn(`Subscriber email lookup failed for ${user}: ${err.message}`);
       return null;

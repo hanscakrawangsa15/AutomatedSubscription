@@ -72,8 +72,20 @@ ${txHash ? `<p><strong>Transaction:</strong> ${txHash}</p>` : ""}
 }
 
 app.post("/api/subscribers", async (req, res) => {
-  const { address, chainName, chainId, email, trafficSource, planId, planLabel, txHash, amountLabel, intervalLabel } =
-    req.body || {};
+  const {
+    address,
+    chainName,
+    chainId,
+    email,
+    trafficSource,
+    planId,
+    planLabel,
+    txHash,
+    amountLabel,
+    intervalLabel,
+    periodsPaid,
+    nextChargeAt,
+  } = req.body || {};
 
   const walletAddress = normalizeAddress(address);
   if (!walletAddress) {
@@ -85,19 +97,27 @@ app.post("/api/subscribers", async (req, res) => {
   if (email !== undefined && email !== null && email !== "" && (typeof email !== "string" || !EMAIL_RE.test(email))) {
     return res.status(400).json({ error: "invalid email" });
   }
+  if (periodsPaid !== undefined && periodsPaid !== null && !Number.isInteger(periodsPaid)) {
+    return res.status(400).json({ error: "invalid periodsPaid" });
+  }
+  if (nextChargeAt !== undefined && nextChargeAt !== null && !Number.isInteger(nextChargeAt)) {
+    return res.status(400).json({ error: "invalid nextChargeAt" });
+  }
 
   try {
     await pool.query(
       `INSERT INTO subscribers
-         (wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         (wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash, periods_paid, next_charge_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?))
        ON DUPLICATE KEY UPDATE
          chain_id = VALUES(chain_id),
          email = COALESCE(NULLIF(VALUES(email), ''), email),
          traffic_source = COALESCE(NULLIF(VALUES(traffic_source), ''), traffic_source),
          plan_id = VALUES(plan_id),
          plan_label = VALUES(plan_label),
-         tx_hash = VALUES(tx_hash)`,
+         tx_hash = VALUES(tx_hash),
+         periods_paid = COALESCE(?, periods_paid),
+         next_charge_at = COALESCE(FROM_UNIXTIME(?), next_charge_at)`,
       [
         walletAddress,
         chainName,
@@ -107,6 +127,10 @@ app.post("/api/subscribers", async (req, res) => {
         planId ?? null,
         planLabel ?? null,
         txHash ?? null,
+        periodsPaid ?? 1,
+        nextChargeAt ?? null,
+        periodsPaid ?? null,
+        nextChargeAt ?? null,
       ],
     );
     console.log(`Upserted subscriber ${walletAddress} on ${chainName} (plan ${planId ?? "?"}, tx ${txHash ?? "-"})`);
@@ -229,7 +253,7 @@ app.get("/api/admin/subscribers", requireAdmin, async (req, res) => {
     const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
 
     const [rows] = await pool.query(
-      `SELECT wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash
+      `SELECT wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash, periods_paid, next_charge_at
        FROM subscribers ${where}
        ORDER BY wallet_address, chain_name
        LIMIT ? OFFSET ?`,

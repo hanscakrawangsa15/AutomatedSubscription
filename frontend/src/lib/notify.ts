@@ -17,6 +17,15 @@ export type SubscriptionReport = {
   // logic that produced them in ConfirmSubscription.tsx.
   amountLabel?: string;
   intervalLabel?: string;
+  // The contract's own lifetime periodsPaid counter (Subscription struct) —
+  // read fresh off-chain right after the action that triggered this report,
+  // so it's always the authoritative count rather than something derived
+  // client-side. Lets the admin panel show how many times a wallet has
+  // ever been successfully charged (initial subscribe + every renewal).
+  periodsPaid?: number;
+  // nextChargeAt as unix seconds (Subscription.nextChargeAt) — same
+  // "read fresh off-chain" reasoning as periodsPaid above.
+  nextChargeAt?: number;
 };
 
 /**

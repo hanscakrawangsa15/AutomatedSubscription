@@ -5,6 +5,8 @@ import { SUBSCRIPTION_STATUS } from "../abi/SubscriptionManager";
 import { classifyInterval, formatDuration } from "../lib/plans";
 import { useTxStatus } from "../hooks/useTxStatus";
 import { useRenewalLog } from "../hooks/useRenewalLog";
+import { reportSubscription } from "../lib/notify";
+import { getChainSlug } from "../lib/chains";
 
 const PLAN_LABELS: Record<string, string> = { monthly: "Monthly", yearly: "Yearly", test: "Test" };
 
@@ -95,11 +97,34 @@ export function ManageSubscription({
       onChanged();
     });
 
+  // Both payNow() and retryCharge() advance the contract's lifetime
+  // periodsPaid/nextChargeAt fields just like a keeper-triggered renewal
+  // does — synced to the subscribers table the same way so the admin
+  // panel stays accurate regardless of which path produced the charge.
+  // Best-effort: a failed sync here never blocks the tx itself, which has
+  // already gone through by this point.
+  const syncPeriodsPaid = async (manager: ReturnType<typeof getSubscriptionManager>, txHash: string) => {
+    const sub = await manager.subscriptions(account);
+    const plan = await manager.plans(sub.planId);
+    const kind = classifyInterval(Number(plan.interval) / 86400);
+    await reportSubscription({
+      address: account,
+      chainName: getChainSlug(chainId),
+      chainId: Number(chainId),
+      planId: Number(sub.planId),
+      planLabel: PLAN_LABELS[kind] ?? kind,
+      txHash,
+      periodsPaid: Number(sub.periodsPaid),
+      nextChargeAt: Number(sub.nextChargeAt),
+    }).catch(() => {});
+  };
+
   const payNow = () =>
     run(async () => {
       const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
       const tx = await manager.payNow();
       await tx.wait();
+      await syncPeriodsPaid(manager, tx.hash);
       await load();
       onChanged();
     });
@@ -109,6 +134,7 @@ export function ManageSubscription({
       const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
       const tx = await manager.retryCharge(account);
       await tx.wait();
+      await syncPeriodsPaid(manager, tx.hash);
       await load();
       onChanged();
     });

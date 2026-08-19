@@ -9,6 +9,10 @@ export type SubscriberRow = {
   plan_id: number | null;
   plan_label: string | null;
   tx_hash: string | null;
+  periods_paid: number | null;
+  // mysql2 returns DATETIME columns as JS Date objects; Express's
+  // res.json() then serializes them to ISO 8601 UTC strings.
+  next_charge_at: string | null;
 };
 
 export type SubscribersPage = {

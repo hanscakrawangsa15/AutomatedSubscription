@@ -145,6 +145,8 @@ function SubscribersTable({ onLoggedOut }: { onLoggedOut: () => void }) {
                 <th>Chain</th>
                 <th>Email</th>
                 <th>Plan</th>
+                <th>Renewals</th>
+                <th>Next charge</th>
                 <th>Traffic source</th>
                 <th>Tx</th>
               </tr>
@@ -158,6 +160,10 @@ function SubscribersTable({ onLoggedOut }: { onLoggedOut: () => void }) {
                   <td>
                     {r.plan_label ?? "—"} {r.plan_id !== null ? `(#${r.plan_id})` : ""}
                   </td>
+                  <td title="Total successful charges, including the initial subscribe">
+                    {r.periods_paid ?? 1}
+                  </td>
+                  <td>{r.next_charge_at ? new Date(r.next_charge_at).toLocaleString() : "—"}</td>
                   <td>{r.traffic_source ?? "—"}</td>
                   <td>
                     {r.tx_hash ? (
