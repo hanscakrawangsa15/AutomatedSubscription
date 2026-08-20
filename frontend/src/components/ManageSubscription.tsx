@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import { formatUnits, type JsonRpcSigner } from "ethers";
+import { type JsonRpcSigner } from "ethers";
 import { getMockUsdc, getSubscriptionManager } from "../lib/contracts";
 import { SUBSCRIPTION_STATUS } from "../abi/SubscriptionManager";
 import { classifyInterval, formatDuration } from "../lib/plans";
 import { useTxStatus } from "../hooks/useTxStatus";
 import { useRenewalLog } from "../hooks/useRenewalLog";
 import { reportSubscription } from "../lib/notify";
-import { getChainSlug } from "../lib/chains";
+import { getChainSlug, getChainName } from "../lib/chains";
 import { waitForTx } from "../lib/waitForTx";
+import { tierLabelForPlanId } from "../lib/pricingTiers";
 
 const PLAN_LABELS: Record<string, string> = { monthly: "Monthly", yearly: "Yearly", test: "Test" };
 
@@ -50,19 +51,13 @@ export function ManageSubscription({
   justSubscribed,
 }: ManageSubscriptionProps) {
   const [info, setInfo] = useState<SubInfo | null>(null);
-  const [walletBalance, setWalletBalance] = useState<string | null>(null);
   const { status, errorMessage, run } = useTxStatus();
   const renewalLog = useRenewalLog(account, chainId, tokenSuffix);
 
   const load = useCallback(async () => {
     const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
     const usdc = getMockUsdc(signer, chainId, tokenSuffix);
-    const [sub, balanceRaw, decimals, symbol] = await Promise.all([
-      manager.subscriptions(account),
-      usdc.balanceOf(account),
-      usdc.decimals(),
-      usdc.symbol(),
-    ]);
+    const [sub, symbol] = await Promise.all([manager.subscriptions(account), usdc.symbol()]);
     const plan = await manager.plans(sub.planId);
     const intervalSeconds = Number(plan.interval);
     const kind = classifyInterval(intervalSeconds / 86400);
@@ -72,11 +67,10 @@ export function ManageSubscription({
       nextChargeAt: Number(sub.nextChargeAt),
       overdueSince: Number(sub.overdueSince),
       periodsPaid: Number(sub.periodsPaid),
-      planLabel: PLAN_LABELS[kind] ?? `Plan #${sub.planId}`,
+      planLabel: tierLabelForPlanId(Number(sub.planId)) ?? PLAN_LABELS[kind] ?? `Plan #${sub.planId}`,
       intervalSeconds,
       tokenSymbol: symbol,
     });
-    setWalletBalance(formatUnits(balanceRaw, decimals));
   }, [signer, account, chainId, tokenSuffix]);
 
   useEffect(() => {
@@ -134,7 +128,7 @@ export function ManageSubscription({
       chainName: getChainSlug(chainId),
       chainId: Number(chainId),
       planId: Number(sub.planId),
-      planLabel: PLAN_LABELS[kind] ?? kind,
+      planLabel: tierLabelForPlanId(Number(sub.planId)) ?? PLAN_LABELS[kind] ?? kind,
       txHash,
       periodsPaid: Number(sub.periodsPaid),
       nextChargeAt: Number(sub.nextChargeAt),
@@ -179,10 +173,6 @@ export function ManageSubscription({
 
       <div className="summary-card">
         <div className="summary-row">
-          <span>Wallet balance</span>
-          <strong>{walletBalance !== null ? `${walletBalance} ${info.tokenSymbol}` : "..."}</strong>
-        </div>
-        <div className="summary-row">
           <span>Status</span>
           <span className={`status-pill status-pill--${statusLabel.toLowerCase()}`}>{statusLabel}</span>
         </div>
@@ -197,6 +187,10 @@ export function ManageSubscription({
         <div className="summary-row">
           <span>Periods paid</span>
           <strong>{info.periodsPaid}</strong>
+        </div>
+        <div className="summary-row">
+          <span>Paid by</span>
+          <strong>{getChainName(chainId)}</strong>
         </div>
         {statusLabel === "Overdue" && (
           <div className="summary-row">
@@ -218,22 +212,6 @@ export function ManageSubscription({
         Chainlink Automation) calling the contract — make sure your wallet keeps enough {info.tokenSymbol} balance
         and allowance.
       </p>
-
-      {renewalLog.length > 0 && (
-        <div className="activity-log">
-          <h3>Renewal activity</h3>
-          <ul>
-            {renewalLog.map((entry) => (
-              <li key={entry.key}>
-                <span>{new Date(entry.timestamp * 1000).toLocaleString()}</span>
-                <span>
-                  Charged {entry.amount} {info.tokenSymbol}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
 
       <div className="row">
         {(statusLabel === "Active" || statusLabel === "Overdue") && (

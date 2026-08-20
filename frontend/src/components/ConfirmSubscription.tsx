@@ -8,6 +8,7 @@ import { getChainSlug } from "../lib/chains";
 import { getTrafficSource, getEmailFromUrl } from "../lib/trafficSource";
 import { useToast } from "./Toast";
 import { waitForTx } from "../lib/waitForTx";
+import { tierLabelForPlanId } from "../lib/pricingTiers";
 
 const PLAN_LABELS: Record<string, string> = { monthly: "Monthly", yearly: "Yearly", test: "Test" };
 
@@ -116,7 +117,7 @@ export function ConfirmSubscription({
         email,
         trafficSource: getTrafficSource(),
         planId: plan.id,
-        planLabel: PLAN_LABELS[plan.kind] ?? plan.kind,
+        planLabel: tierLabelForPlanId(plan.id) ?? PLAN_LABELS[plan.kind] ?? plan.kind,
         txHash: tx.hash,
         amountLabel: `${plan.price} ${plan.tokenSymbol}`,
         intervalLabel: `every ${formatDuration(plan.intervalSeconds)}`,
@@ -152,7 +153,7 @@ export function ConfirmSubscription({
       <div className="summary-card">
         <div className="summary-row">
           <span>Plan</span>
-          <strong>{PLAN_LABELS[plan.kind] ?? `Plan #${plan.id}`}</strong>
+          <strong>{tierLabelForPlanId(plan.id) ?? PLAN_LABELS[plan.kind] ?? `Plan #${plan.id}`}</strong>
         </div>
         <div className="summary-row">
           <span>Price</span>

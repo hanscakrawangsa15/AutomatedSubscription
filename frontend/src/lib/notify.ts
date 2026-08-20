@@ -56,3 +56,35 @@ export async function reportSubscription(report: SubscriptionReport): Promise<bo
     return false;
   }
 }
+
+export type DbSubscriptionRow = {
+  chain_name: string;
+  chain_id: number | null;
+  plan_id: number | null;
+  plan_label: string | null;
+  periods_paid: number | null;
+  next_charge_at: string | null;
+  status: "active" | "overdue" | "expired" | "inactive" | null;
+  tx_hash: string | null;
+};
+
+/**
+ * Fast-path lookup: every row this wallet has ever touched, across every
+ * chain, straight from our own DB — used right after a wallet connects so
+ * the UI can render Manage Subscription immediately instead of waiting on
+ * live on-chain reads. This is a display optimization only — never treat
+ * an empty/stale result here as proof the wallet ISN'T subscribed; the
+ * caller is expected to still confirm against the chain in the background.
+ * Best-effort: an unreachable notify server just means no fast path, not a
+ * blocker — the caller falls back to the on-chain check either way.
+ */
+export async function lookupSubscriptionsByWallet(address: string): Promise<DbSubscriptionRow[]> {
+  try {
+    const res = await fetch(`${NOTIFY_API_URL}/api/subscribers/by-wallet/${address}`);
+    if (!res.ok) return [];
+    const body = await res.json();
+    return Array.isArray(body?.rows) ? body.rows : [];
+  } catch {
+    return [];
+  }
+}

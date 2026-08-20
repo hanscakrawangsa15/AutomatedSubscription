@@ -72,6 +72,24 @@ const TIER_PLAN_ID: Record<string, number> = {
   "advance:yearly": 4,
 };
 
+// Reverse of TIER_PLAN_ID above — given a real on-chain planId, name the
+// specific tier + cycle it is ("Basic (Monthly)") rather than just the
+// cycle alone ("Monthly"). Used everywhere a subscriber's plan is
+// displayed or recorded (Confirm page, Manage Subscription, the
+// subscribers DB row, the admin panel) — relies on the same fixed
+// creation-order guarantee TIER_PLAN_ID documents above.
+const TIER_LABEL_BY_PLAN_ID: Record<number, string> = Object.fromEntries(
+  Object.entries(TIER_PLAN_ID).map(([key, planId]) => {
+    const [tierId, cycle] = key.split(":");
+    const tier = PRICING_TIERS.find((t) => t.id === tierId);
+    return [planId, `${tier?.name ?? tierId} (${cycle === "monthly" ? "Monthly" : "Yearly"})`];
+  }),
+);
+
+export function tierLabelForPlanId(planId: number): string | undefined {
+  return TIER_LABEL_BY_PLAN_ID[planId];
+}
+
 // Matches a pricing tier + billing cycle to a real on-chain plan — the
 // contract has no concept of "Starter/Basic/Advance" tiers, only a flat
 // list of (price, interval) plans created by the owner. Shared by

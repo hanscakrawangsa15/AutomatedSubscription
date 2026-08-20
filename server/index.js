@@ -174,6 +174,37 @@ app.post("/api/subscribers", async (req, res) => {
   }
 });
 
+// Fast-path subscription lookup by wallet alone (no chainName needed) — the
+// frontend calls this right after a wallet connects so it can render
+// Manage Subscription immediately from our own DB instead of waiting on
+// live on-chain reads across every configured payment method/chain. This
+// is a display optimization only: the frontend still re-verifies against
+// the chain in the background and corrects the UI if the DB has drifted
+// (e.g. a sync write that failed at the time), so a stale/missing row here
+// never causes incorrect access — only a slower first paint.
+//
+// Registered *before* the /:chainName/:address route below — Express
+// matches routes in registration order, and "by-wallet" would otherwise be
+// captured as :chainName by that more generic pattern first.
+app.get("/api/subscribers/by-wallet/:address", async (req, res) => {
+  const walletAddress = normalizeAddress(req.params.address);
+  if (!walletAddress) {
+    return res.status(400).json({ error: "invalid address" });
+  }
+  try {
+    const [rows] = await pool.query(
+      `SELECT chain_name, chain_id, plan_id, plan_label, periods_paid, next_charge_at, status, tx_hash
+       FROM subscribers
+       WHERE wallet_address = ?`,
+      [walletAddress],
+    );
+    res.json({ rows });
+  } catch (err) {
+    console.error("Failed to look up subscriber by wallet:", err.message);
+    res.status(500).json({ error: "database error" });
+  }
+});
+
 app.get("/api/subscribers/:chainName/:address", async (req, res) => {
   const walletAddress = normalizeAddress(req.params.address);
   const { chainName } = req.params;

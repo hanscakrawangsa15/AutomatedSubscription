@@ -10,6 +10,7 @@ import { ConfirmSubscription } from "./components/ConfirmSubscription";
 import { ManageSubscription } from "./components/ManageSubscription";
 import { getSubscriptionManager, getPaymentMethods, isChainDeployed } from "./lib/contracts";
 import { SUPPORTED_CHAINS, ETH_MAINNET, BSC_MAINNET, getChainName } from "./lib/chains";
+import { lookupSubscriptionsByWallet, type DbSubscriptionRow } from "./lib/notify";
 import type { PlanInfo } from "./lib/plans";
 import type { BillingCycle, PricingTier } from "./lib/pricingTiers";
 
@@ -17,6 +18,16 @@ const ACTIVE = 1;
 const OVERDUE = 2;
 
 const ANY_CHAIN_CONFIGURED = SUPPORTED_CHAINS.some((c) => isChainDeployed(Number(c.id)));
+
+// Default token-suffix guess per chain for the DB fast-path below — matches
+// PaymentNetworkStep's NETWORKS mapping (each chain's current *primary*
+// USDT offering). A DB row only records chain_name, not which of a chain's
+// possibly-several payment methods (legacy WETH/USDC managers still exist)
+// it's on, so this is an optimistic guess for the common case (new-style
+// USDT subscriptions), corrected by the real on-chain check that still
+// runs in the background — a legacy subscriber briefly sees the wrong
+// guess corrected a moment later, never an actually-wrong final state.
+const DEFAULT_SUFFIX_BY_CHAIN: Record<number, string> = { 1: "_USDT", 56: "" };
 
 function App() {
   const { signer, account, chainId, connecting, reconnecting, error, connect, disconnect } = useAppKitWallet();
@@ -36,19 +47,51 @@ function App() {
   // longer offers them for new subscriptions), so "subscribed" is checked
   // across all of them, not just USDT's.
   const [subTokenSuffix, setSubTokenSuffix] = useState("");
+  // Distinct from subStatus === null (which also covers "not applicable" —
+  // disconnected/wrong network) — this is specifically "the on-chain read
+  // is in flight right now", used below to decide when the DB fast-path
+  // guess is still allowed to drive the UI.
+  const [onChainLoading, setOnChainLoading] = useState(false);
 
   const bump = useCallback(() => setRefreshKey((k) => k + 1), []);
 
   const wrongNetwork = chainId !== null && !isChainDeployed(chainId);
 
+  // DB fast-path: fired the moment a wallet connects, independent of which
+  // chain it's on — a plain indexed lookup in our own database, so this
+  // resolves in milliseconds versus the on-chain check below, which has to
+  // round-trip an RPC per configured payment method. Purely a display
+  // optimization (see lookupSubscriptionsByWallet's own doc comment): the
+  // on-chain effect further down still runs regardless and is the one
+  // whose result actually wins once it resolves.
+  const [dbRows, setDbRows] = useState<DbSubscriptionRow[]>([]);
+  useEffect(() => {
+    if (!account) {
+      setDbRows([]);
+      return;
+    }
+    let cancelled = false;
+    lookupSubscriptionsByWallet(account).then((rows) => {
+      if (!cancelled) setDbRows(rows);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [account, refreshKey]);
+
+  const dbActiveRow = dbRows.find((r) => r.status === "active" || r.status === "overdue") ?? null;
+  const dbActiveChainId = dbActiveRow?.chain_id ?? null;
+
   useEffect(() => {
     if (!signer || !account || wrongNetwork || chainId === null) {
       setSubStatus(null);
       setSubTokenSuffix("");
+      setOnChainLoading(false);
       return;
     }
 
     let cancelled = false;
+    setOnChainLoading(true);
     const methods = getPaymentMethods(chainId);
     Promise.all(
       methods.map((m) =>
@@ -62,13 +105,43 @@ function App() {
       const active = results.find((r) => r.status === ACTIVE || r.status === OVERDUE);
       setSubStatus(active?.status ?? results[0]?.status ?? null);
       setSubTokenSuffix(active?.suffix ?? "");
+      setOnChainLoading(false);
     });
     return () => {
       cancelled = true;
     };
   }, [signer, account, chainId, refreshKey, wrongNetwork]);
 
-  const hasSubscription = subStatus === ACTIVE || subStatus === OVERDUE;
+  const onChainHasSubscription = subStatus === ACTIVE || subStatus === OVERDUE;
+  // While the (authoritative) on-chain check is still in flight, optimistically
+  // trust the DB if it names an active row on the chain the wallet is
+  // *currently* on — this is what actually removes the wait the user
+  // asked about. Once on-chain resolves, it always wins (this condition
+  // stops mattering the moment onChainLoading goes false).
+  const dbFastGuessApplies = onChainLoading && dbActiveChainId !== null && chainId !== null && dbActiveChainId === Number(chainId);
+  const hasSubscription = onChainHasSubscription || dbFastGuessApplies;
+  const effectiveTokenSuffix = onChainHasSubscription
+    ? subTokenSuffix
+    : chainId !== null
+      ? (DEFAULT_SUFFIX_BY_CHAIN[Number(chainId)] ?? "")
+      : "";
+
+  // The DB knows which chain an active subscription actually lives on —
+  // once the on-chain check has confirmed there's nothing on the *current*
+  // chain (never while it's still loading/optimistically trusting the DB
+  // guess above), point the user at the right one directly instead of
+  // making them guess between two generic buttons. Covers both "wallet on
+  // an unsupported chain entirely" and "wallet on a supported chain, just
+  // not the one the subscription is on".
+  const dbChainMismatch =
+    !onChainLoading && !onChainHasSubscription && dbActiveChainId !== null && dbActiveChainId !== Number(chainId);
+  const suggestedNetwork = dbChainMismatch
+    ? dbActiveChainId === Number(ETH_MAINNET.id)
+      ? ETH_MAINNET
+      : dbActiveChainId === Number(BSC_MAINNET.id)
+        ? BSC_MAINNET
+        : null
+    : null;
 
   const backToPlans = () => {
     setSelectedTier(null);
@@ -126,15 +199,29 @@ function App() {
           </div>
         )}
 
-        {signer && account && wrongNetwork && (
+        {signer && account && (wrongNetwork || dbChainMismatch) && (
           <div className="banner banner--warning">
-            Your wallet is connected to <strong>{getChainName(chainId)}</strong>, which this page doesn't support.
-            If you've already subscribed, switch to the network you paid on — this page can only check your
-            subscription on a supported network.
-            <div className="row" style={{ marginTop: 8 }}>
-              <button onClick={() => switchNetwork(ETH_MAINNET)}>Switch to Ethereum</button>
-              <button onClick={() => switchNetwork(BSC_MAINNET)}>Switch to BNB Chain</button>
-            </div>
+            {suggestedNetwork ? (
+              <>
+                Your subscription is on <strong>{getChainName(dbActiveChainId)}</strong>, but your wallet is
+                connected to <strong>{getChainName(chainId)}</strong>. Switch networks to manage it.
+                <div className="row" style={{ marginTop: 8 }}>
+                  <button onClick={() => switchNetwork(suggestedNetwork)}>
+                    Switch to {getChainName(dbActiveChainId)}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                Your wallet is connected to <strong>{getChainName(chainId)}</strong>, which this page doesn't
+                support. If you've already subscribed, switch to the network you paid on — this page can only
+                check your subscription on a supported network.
+                <div className="row" style={{ marginTop: 8 }}>
+                  <button onClick={() => switchNetwork(ETH_MAINNET)}>Switch to Ethereum</button>
+                  <button onClick={() => switchNetwork(BSC_MAINNET)}>Switch to BNB Chain</button>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -164,7 +251,7 @@ function App() {
               signer={signer}
               account={account}
               chainId={chainId}
-              tokenSuffix={subTokenSuffix}
+              tokenSuffix={effectiveTokenSuffix}
               refreshKey={refreshKey}
               onChanged={bump}
               justSubscribed={justSubscribed}
