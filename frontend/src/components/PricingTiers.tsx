@@ -1,14 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchPlans, type PlanInfo } from "../lib/plans";
 import { getReadProvider } from "../lib/readProvider";
-import {
-  PRICING_TIERS,
-  TEST_TIER,
-  priceForCycle,
-  findOnChainPlan,
-  type BillingCycle,
-  type PricingTier,
-} from "../lib/pricingTiers";
+import { PRICING_TIERS, priceForCycle, findOnChainPlan, type BillingCycle, type PricingTier } from "../lib/pricingTiers";
 
 // USDT-only, single reference chain — every price shown here is identical
 // in USDT no matter which network the user ends up paying from (both
@@ -56,7 +49,6 @@ export function PricingTiers({ refreshKey, onSelect }: PricingTiersProps) {
   }, [refreshKey]);
 
   const visibleTiers = PRICING_TIERS.filter((t) => priceForCycle(t, cycle) !== undefined);
-  const testPlan = findOnChainPlan(plans, TEST_TIER, "test");
 
   return (
     <section className="checkout-step pricing-tiers">
@@ -119,19 +111,6 @@ export function PricingTiers({ refreshKey, onSelect }: PricingTiersProps) {
           );
         })}
       </div>
-
-      {testPlan && (
-        <div className="test-plan-card">
-          <span className="test-plan-card__icon">{TEST_TIER.icon}</span>
-          <div className="test-plan-card__body">
-            <strong>Test Plan</strong>
-            <span className="muted">
-              {testPlan.price} {testPlan.tokenSymbol} · charges hourly — internal QA only
-            </span>
-          </div>
-          <button onClick={() => onSelect(testPlan, TEST_TIER.id, "test")}>Get Started</button>
-        </div>
-      )}
 
       <p className="muted pricing-tiers__footer">
         Need Help? Contact <a href="mailto:support@xenorize.com">support@xenorize.com</a>
