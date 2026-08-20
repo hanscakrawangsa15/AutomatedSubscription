@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useAppKitNetwork } from "@reown/appkit/react";
 import "./App.css";
 import { useAppKitWallet } from "./hooks/useAppKitWallet";
 import { WalletBar } from "./components/WalletBar";
@@ -8,7 +9,7 @@ import { PaymentNetworkStep } from "./components/PaymentNetworkStep";
 import { ConfirmSubscription } from "./components/ConfirmSubscription";
 import { ManageSubscription } from "./components/ManageSubscription";
 import { getSubscriptionManager, getPaymentMethods, isChainDeployed } from "./lib/contracts";
-import { SUPPORTED_CHAINS } from "./lib/chains";
+import { SUPPORTED_CHAINS, ETH_MAINNET, BSC_MAINNET, getChainName } from "./lib/chains";
 import type { PlanInfo } from "./lib/plans";
 import type { BillingCycle, PricingTier } from "./lib/pricingTiers";
 
@@ -19,6 +20,7 @@ const ANY_CHAIN_CONFIGURED = SUPPORTED_CHAINS.some((c) => isChainDeployed(Number
 
 function App() {
   const { signer, account, chainId, connecting, reconnecting, error, connect, disconnect } = useAppKitWallet();
+  const { switchNetwork } = useAppKitNetwork();
   const [refreshKey, setRefreshKey] = useState(0);
   // The user's *intent* (which tier + billing cycle) — chain-agnostic, since
   // every payment network carries the exact same USDT-priced plan set. The
@@ -121,6 +123,18 @@ function App() {
             <code>docs/mainnet-addresses.md</code> and the mainnet-readiness plan for what's needed before a
             real deploy. Once deployed, add the printed <code>VITE_USDC_ADDRESS_&lt;chainId&gt;</code> /{" "}
             <code>VITE_SUBSCRIPTION_MANAGER_ADDRESS_&lt;chainId&gt;</code> pair to <code>frontend/.env</code>.
+          </div>
+        )}
+
+        {signer && account && wrongNetwork && (
+          <div className="banner banner--warning">
+            Your wallet is connected to <strong>{getChainName(chainId)}</strong>, which this page doesn't support.
+            If you've already subscribed, switch to the network you paid on — this page can only check your
+            subscription on a supported network.
+            <div className="row" style={{ marginTop: 8 }}>
+              <button onClick={() => switchNetwork(ETH_MAINNET)}>Switch to Ethereum</button>
+              <button onClick={() => switchNetwork(BSC_MAINNET)}>Switch to BNB Chain</button>
+            </div>
           </div>
         )}
 
