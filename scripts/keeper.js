@@ -1,6 +1,6 @@
 require("dotenv").config();
 const hre = require("hardhat");
-const { lookupSubscriberEmail, updateRenewalInfo } = require("./subscribersDb");
+const { lookupSubscriberEmail, updateRenewalInfo, reconcileMissingSubscriber } = require("./subscribersDb");
 const { sendEmail } = require("./emailClient");
 
 const POLL_INTERVAL_MS = Number(process.env.KEEPER_POLL_MS || 10_000);
@@ -146,14 +146,49 @@ async function main() {
 
   const knownUsers = new Set();
   let lastScannedBlock = null;
+  const chainName = chainNameFor(chainId);
+  // Mirrors the contract's Status enum — see server/index.js's
+  // SUBSCRIPTION_STATUSES for the admin-panel-facing side of this mapping.
+  const STATUS_LABELS = { 0: "inactive", 1: "active", 2: "overdue", 3: "expired" };
 
   const scanForUsers = async (fromBlock, toBlock) => {
     const [subscribed, reactivated] = await Promise.all([
       queryLogsChunked(manager, manager.filters.Subscribed(), fromBlock, toBlock),
       queryLogsChunked(manager, manager.filters.Reactivated(), fromBlock, toBlock),
     ]);
-    for (const ev of [...subscribed, ...reactivated]) {
+    const events = [...subscribed, ...reactivated];
+    for (const ev of events) {
       knownUsers.add(ev.args.user);
+    }
+    // Self-healing: reconciles any wallet this on-chain event proves
+    // subscribed, but whose DB row somehow never showed up (see
+    // reconcileMissingSubscriber's doc comment for the real incident this
+    // covers). Runs on every scan — the initial full historical scan on
+    // keeper startup catches any pre-existing gap, the ongoing incremental
+    // scan catches a fresh one within one poll interval. INSERT IGNORE
+    // makes this a no-op for the overwhelmingly common case where the
+    // client-side write already succeeded.
+    for (const ev of events) {
+      const user = ev.args.user;
+      try {
+        const sub = await manager.subscriptions(user);
+        const plan = await manager.plans(sub.planId);
+        const inserted = await reconcileMissingSubscriber(user.toLowerCase(), chainName, {
+          chainId: Number(chainId),
+          planId: Number(sub.planId),
+          planLabel: planLabel(Number(plan.interval)),
+          txHash: ev.transactionHash,
+          periodsPaid: Number(sub.periodsPaid),
+          nextChargeAtSeconds: Number(sub.nextChargeAt),
+          status: STATUS_LABELS[Number(sub.status)] ?? null,
+          renewalResult: "success",
+        });
+        if (inserted) {
+          console.log(`Reconciled missing DB row for ${user} on ${chainName} (backfilled from on-chain event)`);
+        }
+      } catch (err) {
+        console.warn(`Reconciliation check failed for ${user}: ${err.message}`);
+      }
     }
   };
 
@@ -171,12 +206,6 @@ async function main() {
     await scanForUsers(lastScannedBlock + 1, latest);
     lastScannedBlock = latest;
   };
-
-  const chainName = chainNameFor(chainId);
-
-  // Mirrors the contract's Status enum — see server/index.js's
-  // SUBSCRIPTION_STATUSES for the admin-panel-facing side of this mapping.
-  const STATUS_LABELS = { 0: "inactive", 1: "active", 2: "overdue", 3: "expired" };
 
   // Always reflects the contract's current truth into the DB, independent
   // of whether email notification is possible for this subscriber (see

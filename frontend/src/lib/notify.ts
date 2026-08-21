@@ -43,6 +43,16 @@ export type SubscriptionReport = {
  * plan/tx details are captured for every real subscriber. Best-effort:
  * failures are swallowed so a missing/offline notify server never blocks
  * subscribing.
+ *
+ * keepalive:true is load-bearing, not decoration — confirmed via a real
+ * incident: a subscriber closed their wallet/tab right after a successful
+ * subscribe(), and this request never reached the server at all (zero
+ * trace in server logs despite the server being up the whole time). A
+ * plain fetch() can be aborted mid-flight when the page unloads; keepalive
+ * tells the browser to finish this (small — well under the ~64KB keepalive
+ * budget) request in the background regardless. Kept as a self-healing
+ * reconciliation in scripts/keeper.js too, for every other way this same
+ * write could fail (network drop, notify-server downtime, ...).
  */
 export async function reportSubscription(report: SubscriptionReport): Promise<boolean> {
   try {
@@ -50,6 +60,7 @@ export async function reportSubscription(report: SubscriptionReport): Promise<bo
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(report),
+      keepalive: true,
     });
     return res.ok;
   } catch {

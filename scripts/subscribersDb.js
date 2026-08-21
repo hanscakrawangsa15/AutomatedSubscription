@@ -1,7 +1,13 @@
-// Shared MySQL `subscribers` table access for the keeper script — needs
-// only a read (renewal-email lookup by wallet+chain), never a write; the
-// row itself is written once by server/index.js when a subscribe()
-// transaction confirms (see docs on that endpoint).
+// Shared MySQL `subscribers` table access for the keeper script. Mostly
+// reads (renewal-email lookup by wallet+chain, updateRenewalInfo after a
+// charge) — the row itself is normally written once by server/index.js's
+// /api/subscribers when a subscribe() transaction confirms client-side.
+// reconcileMissingSubscriber below is the exception: a real incident
+// showed that client-side write can simply never arrive (closed
+// wallet/tab right after a successful subscribe(), zero trace on the
+// server) — the keeper already scans every Subscribed/Reactivated event
+// on-chain for its own discovery purposes, so it double-checks each one
+// against the DB and backfills if the row never showed up.
 const mysql = require("mysql2/promise");
 
 let pool;
@@ -49,4 +55,26 @@ async function updateRenewalInfo(walletAddress, chainName, { periodsPaid, nextCh
   );
 }
 
-module.exports = { lookupSubscriberEmail, updateRenewalInfo };
+// Backfills a row straight from on-chain data if (and only if) one doesn't
+// already exist for this wallet+chain — INSERT IGNORE relies on the
+// unique_wallet_chain key (wallet_address, chain_name) to make this a
+// no-op rather than an error when the normal client-side write already
+// succeeded (the overwhelmingly common case). email/traffic_source are
+// never recoverable this way (never submitted anywhere retrievable) — the
+// wallet just won't get renewal emails until it resubscribes or shares an
+// email some other way.
+async function reconcileMissingSubscriber(
+  walletAddress,
+  chainName,
+  { chainId, planId, planLabel, txHash, periodsPaid, nextChargeAtSeconds, status, renewalResult },
+) {
+  const [result] = await getPool().query(
+    `INSERT IGNORE INTO subscribers
+       (wallet_address, chain_name, chain_id, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, status, last_renewal_result)
+     VALUES (?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?)`,
+    [walletAddress, chainName, chainId, planId, planLabel, txHash, periodsPaid, nextChargeAtSeconds, status, renewalResult],
+  );
+  return result.affectedRows > 0;
+}
+
+module.exports = { lookupSubscriberEmail, updateRenewalInfo, reconcileMissingSubscriber };
