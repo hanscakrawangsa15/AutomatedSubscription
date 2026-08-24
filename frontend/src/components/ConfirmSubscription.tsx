@@ -104,11 +104,14 @@ export function ConfirmSubscription({
       setStep("subscribing");
       const manager = getSubscriptionManager(signer, chainId, plan.tokenSuffix);
       const tx = await manager.subscribe(plan.id);
-      await waitForTx(tx, chainId);
+      const receipt = await waitForTx(tx, chainId);
       // periodsPaid is a lifetime counter on the contract (persists across
       // cancel -> resubscribe cycles), so it isn't necessarily 1 here —
       // read the real value rather than assume.
       const sub = await manager.subscriptions(account);
+      // The tx's own block timestamp, not Date.now() — this is what
+      // "activated at" means (see notify.ts's doc comment on the field).
+      const activatedAt = receipt ? Number((await receipt.getBlock()).timestamp) : undefined;
 
       const ok = await reportSubscription({
         address: account,
@@ -123,6 +126,7 @@ export function ConfirmSubscription({
         intervalLabel: `every ${formatDuration(plan.intervalSeconds)}`,
         periodsPaid: Number(sub.periodsPaid),
         nextChargeAt: Number(sub.nextChargeAt),
+        activatedAt,
         // subscribe() always either transfers the first period's payment or
         // reverts entirely — reaching this line means it succeeded.
         status: "active",

@@ -173,6 +173,7 @@ async function main() {
       try {
         const sub = await manager.subscriptions(user);
         const plan = await manager.plans(sub.planId);
+        const block = await ev.getBlock();
         const inserted = await reconcileMissingSubscriber(user.toLowerCase(), chainName, {
           chainId: Number(chainId),
           planId: Number(sub.planId),
@@ -180,6 +181,7 @@ async function main() {
           txHash: ev.transactionHash,
           periodsPaid: Number(sub.periodsPaid),
           nextChargeAtSeconds: Number(sub.nextChargeAt),
+          activatedAtSeconds: Number(block.timestamp),
           status: STATUS_LABELS[Number(sub.status)] ?? null,
           renewalResult: "success",
         });
@@ -210,11 +212,17 @@ async function main() {
   // Always reflects the contract's current truth into the DB, independent
   // of whether email notification is possible for this subscriber (see
   // notifyIfRegistered below, which wraps this for the two paths that also
-  // send a receipt).
-  const syncRenewalInfo = async (user, sub, renewalResult) => {
+  // send a receipt). activatedAtSeconds is only meaningful — and only ever
+  // passed — when a charge genuinely just succeeded (see call sites below);
+  // omitted for the failure/expiry paths so the column keeps reflecting the
+  // last time the subscription was actually activated rather than getting
+  // cleared or backdated by a non-event.
+  const syncRenewalInfo = async (user, sub, renewalResult, activatedAtSeconds, txHash) => {
     await updateRenewalInfo(user.toLowerCase(), chainName, {
       periodsPaid: Number(sub.periodsPaid),
       nextChargeAtSeconds: Number(sub.nextChargeAt),
+      activatedAtSeconds: activatedAtSeconds ?? null,
+      txHash: txHash ?? null,
       status: STATUS_LABELS[Number(sub.status)] ?? null,
       renewalResult,
     }).catch((err) => {
@@ -222,8 +230,8 @@ async function main() {
     });
   };
 
-  const notifyIfRegistered = async (user, sub, txHash, renewalResult) => {
-    await syncRenewalInfo(user, sub, renewalResult);
+  const notifyIfRegistered = async (user, sub, txHash, renewalResult, activatedAtSeconds) => {
+    await syncRenewalInfo(user, sub, renewalResult, activatedAtSeconds, txHash);
 
     const email = await lookupSubscriberEmail(user.toLowerCase(), chainName).catch((err) => {
       console.warn(`Subscriber email lookup failed for ${user}: ${err.message}`);
@@ -251,7 +259,7 @@ async function main() {
       try {
         if (status === 1 && (await manager.isDue(user))) {
           const tx = await manager.chargeDue(user);
-          await tx.wait();
+          const receipt = await tx.wait();
           console.log(`[${time}] chargeDue(${user}) OK`);
           const updated = await manager.subscriptions(user);
           // chargeDue never reverts on insufficient allowance/balance — it
@@ -259,14 +267,16 @@ async function main() {
           // non-reverting tx here does NOT necessarily mean money moved.
           // The resulting status is the only reliable signal.
           const renewalResult = Number(updated.status) === 1 ? "success" : "failed";
-          await notifyIfRegistered(user, updated, tx.hash, renewalResult);
+          const activatedAtSeconds = renewalResult === "success" ? Number((await receipt.getBlock()).timestamp) : undefined;
+          await notifyIfRegistered(user, updated, tx.hash, renewalResult, activatedAtSeconds);
         } else if (status === 2) {
           try {
             const tx = await manager.retryCharge(user);
-            await tx.wait();
+            const receipt = await tx.wait();
             console.log(`[${time}] retryCharge(${user}) OK`);
             const updated = await manager.subscriptions(user);
-            await notifyIfRegistered(user, updated, tx.hash, "success");
+            const activatedAtSeconds = Number((await receipt.getBlock()).timestamp);
+            await notifyIfRegistered(user, updated, tx.hash, "success", activatedAtSeconds);
           } catch {
             // retryCharge reverts outright on failure (unlike chargeDue) —
             // reaching here means still insufficient allowance/balance.

@@ -26,6 +26,11 @@ export type SubscriptionReport = {
   // nextChargeAt as unix seconds (Subscription.nextChargeAt) — same
   // "read fresh off-chain" reasoning as periodsPaid above.
   nextChargeAt?: number;
+  // Unix seconds — the *block timestamp* of txHash, not "now" client-side.
+  // Only meaningful for a genuine activation (initial subscribe, a
+  // successful renewal/payNow/retryCharge) — omit for actions that don't
+  // represent one (e.g. cancel), so the server preserves whatever it had.
+  activatedAt?: number;
   // Mirrors the contract's Status enum, lowercased — see server/index.js's
   // SUBSCRIPTION_STATUSES for the accepted values.
   status?: "active" | "overdue" | "expired" | "inactive";

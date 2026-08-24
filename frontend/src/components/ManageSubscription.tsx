@@ -119,10 +119,15 @@ export function ManageSubscription({
   // both of these contract functions revert outright on insufficient
   // allowance/balance rather than silently degrading — reaching this line
   // always means the charge genuinely succeeded.
-  const syncRenewalInfo = async (manager: ReturnType<typeof getSubscriptionManager>, txHash: string) => {
+  const syncRenewalInfo = async (
+    manager: ReturnType<typeof getSubscriptionManager>,
+    txHash: string,
+    receipt: Awaited<ReturnType<typeof waitForTx>>,
+  ) => {
     const sub = await manager.subscriptions(account);
     const plan = await manager.plans(sub.planId);
     const kind = classifyInterval(Number(plan.interval) / 86400);
+    const activatedAt = receipt ? Number((await receipt.getBlock()).timestamp) : undefined;
     await reportSubscription({
       address: account,
       chainName: getChainSlug(chainId),
@@ -132,6 +137,7 @@ export function ManageSubscription({
       txHash,
       periodsPaid: Number(sub.periodsPaid),
       nextChargeAt: Number(sub.nextChargeAt),
+      activatedAt,
       status: "active",
       renewalResult: "success",
     }).catch(() => {});
@@ -141,8 +147,8 @@ export function ManageSubscription({
     run(async () => {
       const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
       const tx = await manager.payNow();
-      await waitForTx(tx, chainId);
-      await syncRenewalInfo(manager, tx.hash);
+      const receipt = await waitForTx(tx, chainId);
+      await syncRenewalInfo(manager, tx.hash, receipt);
       await load();
       onChanged();
     }, "Pay Now");
@@ -151,8 +157,8 @@ export function ManageSubscription({
     run(async () => {
       const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
       const tx = await manager.retryCharge(account);
-      await waitForTx(tx, chainId);
-      await syncRenewalInfo(manager, tx.hash);
+      const receipt = await waitForTx(tx, chainId);
+      await syncRenewalInfo(manager, tx.hash, receipt);
       await load();
       onChanged();
     }, "Retry Charge");

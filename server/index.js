@@ -18,6 +18,15 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME,
   waitForConnections: true,
   connectionLimit: 10,
+  // The DB server's own system timezone is UTC (confirmed: NOW() ==
+  // UTC_TIMESTAMP() there), but mysql2 defaults to "local" — meaning it
+  // interprets DATETIME values using *this process's* timezone instead.
+  // Wherever this runs in a non-UTC zone (confirmed: Asia/Jakarta, UTC+7,
+  // on this box), every DATETIME read/write silently drifted by that
+  // offset — e.g. next_charge_at read back exactly 7 hours earlier than
+  // the real on-chain value. "Z" pins both directions to UTC, matching
+  // the server's actual storage.
+  timezone: "Z",
 });
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -94,6 +103,7 @@ app.post("/api/subscribers", async (req, res) => {
     intervalLabel,
     periodsPaid,
     nextChargeAt,
+    activatedAt,
     status,
     renewalResult,
   } = req.body || {};
@@ -114,6 +124,9 @@ app.post("/api/subscribers", async (req, res) => {
   if (nextChargeAt !== undefined && nextChargeAt !== null && !Number.isInteger(nextChargeAt)) {
     return res.status(400).json({ error: "invalid nextChargeAt" });
   }
+  if (activatedAt !== undefined && activatedAt !== null && !Number.isInteger(activatedAt)) {
+    return res.status(400).json({ error: "invalid activatedAt" });
+  }
   if (status !== undefined && status !== null && !SUBSCRIPTION_STATUSES.includes(status)) {
     return res.status(400).json({ error: "invalid status" });
   }
@@ -124,8 +137,8 @@ app.post("/api/subscribers", async (req, res) => {
   try {
     await pool.query(
       `INSERT INTO subscribers
-         (wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, status, last_renewal_result)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?)
+         (wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, activated_at, status, last_renewal_result)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), FROM_UNIXTIME(?), ?, ?)
        ON DUPLICATE KEY UPDATE
          chain_id = VALUES(chain_id),
          email = COALESCE(NULLIF(VALUES(email), ''), email),
@@ -135,6 +148,7 @@ app.post("/api/subscribers", async (req, res) => {
          tx_hash = VALUES(tx_hash),
          periods_paid = COALESCE(?, periods_paid),
          next_charge_at = COALESCE(FROM_UNIXTIME(?), next_charge_at),
+         activated_at = COALESCE(FROM_UNIXTIME(?), activated_at),
          status = COALESCE(?, status),
          last_renewal_result = COALESCE(?, last_renewal_result)`,
       [
@@ -148,10 +162,12 @@ app.post("/api/subscribers", async (req, res) => {
         txHash ?? null,
         periodsPaid ?? 1,
         nextChargeAt ?? null,
+        activatedAt ?? null,
         status ?? "active",
         renewalResult ?? "success",
         periodsPaid ?? null,
         nextChargeAt ?? null,
+        activatedAt ?? null,
         status ?? null,
         renewalResult ?? null,
       ],
@@ -307,7 +323,7 @@ app.get("/api/admin/subscribers", requireAdmin, async (req, res) => {
     const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
 
     const [rows] = await pool.query(
-      `SELECT wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, status, last_renewal_result
+      `SELECT wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, activated_at, status, last_renewal_result
        FROM subscribers ${where}
        ORDER BY wallet_address, chain_name
        LIMIT ? OFFSET ?`,

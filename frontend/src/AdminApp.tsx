@@ -174,6 +174,7 @@ function SubscribersTable({ onLoggedOut }: { onLoggedOut: () => void }) {
                 <th>Status</th>
                 <th>Renewals</th>
                 <th>Last renewal</th>
+                <th>Activated at</th>
                 <th>Next charge</th>
                 <th>Traffic source</th>
                 <th>Tx</th>
@@ -193,6 +194,9 @@ function SubscribersTable({ onLoggedOut }: { onLoggedOut: () => void }) {
                     {r.periods_paid ?? 1}
                   </td>
                   <td>{renewalResultBadge(r.last_renewal_result)}</td>
+                  <td title="When the currently-shown transaction was actually confirmed on-chain">
+                    {r.activated_at ? new Date(r.activated_at).toLocaleString() : "—"}
+                  </td>
                   <td>{r.next_charge_at ? new Date(r.next_charge_at).toLocaleString() : "—"}</td>
                   <td>{r.traffic_source ?? "—"}</td>
                   <td>

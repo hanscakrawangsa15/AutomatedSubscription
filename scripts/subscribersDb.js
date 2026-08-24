@@ -22,6 +22,11 @@ function getPool() {
       database: process.env.DB_NAME,
       waitForConnections: true,
       connectionLimit: 5,
+      // See the matching comment in server/index.js — mysql2 defaults to
+      // interpreting DATETIME values in this process's local timezone
+      // rather than the DB server's (UTC), silently shifting every
+      // next_charge_at read/write by the difference. "Z" pins both to UTC.
+      timezone: "Z",
     });
   }
   return pool;
@@ -46,12 +51,17 @@ async function lookupSubscriberEmail(walletAddress, chainName) {
 // the row doesn't exist yet, which is fine — it's only ever expected to
 // already exist, written by server/index.js's /api/subscribers on the
 // initial subscribe.
-async function updateRenewalInfo(walletAddress, chainName, { periodsPaid, nextChargeAtSeconds, status, renewalResult }) {
+async function updateRenewalInfo(
+  walletAddress,
+  chainName,
+  { periodsPaid, nextChargeAtSeconds, activatedAtSeconds, txHash, status, renewalResult },
+) {
   await getPool().query(
     `UPDATE subscribers
-       SET periods_paid = ?, next_charge_at = FROM_UNIXTIME(?), status = ?, last_renewal_result = ?
+       SET periods_paid = ?, next_charge_at = FROM_UNIXTIME(?), activated_at = FROM_UNIXTIME(?),
+           tx_hash = COALESCE(?, tx_hash), status = ?, last_renewal_result = ?
      WHERE wallet_address = ? AND chain_name = ?`,
-    [periodsPaid, nextChargeAtSeconds, status, renewalResult, walletAddress, chainName],
+    [periodsPaid, nextChargeAtSeconds, activatedAtSeconds, txHash ?? null, status, renewalResult, walletAddress, chainName],
   );
 }
 
@@ -66,13 +76,25 @@ async function updateRenewalInfo(walletAddress, chainName, { periodsPaid, nextCh
 async function reconcileMissingSubscriber(
   walletAddress,
   chainName,
-  { chainId, planId, planLabel, txHash, periodsPaid, nextChargeAtSeconds, status, renewalResult },
+  { chainId, planId, planLabel, txHash, periodsPaid, nextChargeAtSeconds, activatedAtSeconds, status, renewalResult },
 ) {
   const [result] = await getPool().query(
     `INSERT IGNORE INTO subscribers
-       (wallet_address, chain_name, chain_id, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, status, last_renewal_result)
-     VALUES (?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), ?, ?)`,
-    [walletAddress, chainName, chainId, planId, planLabel, txHash, periodsPaid, nextChargeAtSeconds, status, renewalResult],
+       (wallet_address, chain_name, chain_id, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, activated_at, status, last_renewal_result)
+     VALUES (?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), FROM_UNIXTIME(?), ?, ?)`,
+    [
+      walletAddress,
+      chainName,
+      chainId,
+      planId,
+      planLabel,
+      txHash,
+      periodsPaid,
+      nextChargeAtSeconds,
+      activatedAtSeconds,
+      status,
+      renewalResult,
+    ],
   );
   return result.affectedRows > 0;
 }
