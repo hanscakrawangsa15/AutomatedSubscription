@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import "./App.css";
-import { adminLogin, adminLogout, adminMe, adminFetchSubscribers, type SubscriberRow } from "./lib/adminApi";
+import {
+  adminLogin,
+  adminLogout,
+  adminMe,
+  adminFetchSubscribers,
+  type SubscriberRow,
+  type SortableColumn,
+} from "./lib/adminApi";
 import { useToast } from "./components/Toast";
 
 const PAGE_SIZE = 50;
@@ -43,6 +50,34 @@ function renewalResultBadge(result: SubscriberRow["last_renewal_result"]) {
     <span style={{ color, fontWeight: 600, textTransform: "capitalize" }} title="Whether the most recent charge attempt actually moved funds">
       {result}
     </span>
+  );
+}
+
+function SortableHeader({
+  column,
+  label,
+  sortBy,
+  sortDir,
+  onSort,
+}: {
+  column: SortableColumn;
+  label: string;
+  sortBy: SortableColumn;
+  sortDir: "asc" | "desc";
+  onSort: (column: SortableColumn) => void;
+}) {
+  const active = column === sortBy;
+  return (
+    <th
+      onClick={() => onSort(column)}
+      style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
+      title={`Sort by ${label}`}
+    >
+      {label}
+      <span style={{ display: "inline-block", width: 14, color: active ? "inherit" : "transparent" }}>
+        {active ? (sortDir === "asc" ? " ▲" : " ▼") : " ▲"}
+      </span>
+    </th>
   );
 }
 
@@ -107,6 +142,8 @@ function SubscribersTable({ onLoggedOut }: { onLoggedOut: () => void }) {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<SortableColumn>("wallet_address");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -114,21 +151,36 @@ function SubscribersTable({ onLoggedOut }: { onLoggedOut: () => void }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    adminFetchSubscribers({ page, pageSize: PAGE_SIZE, search: search.trim() || undefined }).then((result) => {
-      if (cancelled) return;
-      setLoading(false);
-      if (result.ok) {
-        setRows(result.data.rows);
-        setTotal(result.data.total);
-      } else {
-        setError(result.error);
-        if (result.unauthorized) onLoggedOut();
-      }
-    });
+    adminFetchSubscribers({ page, pageSize: PAGE_SIZE, search: search.trim() || undefined, sortBy, sortDir }).then(
+      (result) => {
+        if (cancelled) return;
+        setLoading(false);
+        if (result.ok) {
+          setRows(result.data.rows);
+          setTotal(result.data.total);
+        } else {
+          setError(result.error);
+          if (result.unauthorized) onLoggedOut();
+        }
+      },
+    );
     return () => {
       cancelled = true;
     };
-  }, [page, search, onLoggedOut]);
+  }, [page, search, sortBy, sortDir, onLoggedOut]);
+
+  // Clicking the already-active column flips direction; clicking a new one
+  // switches to it ascending — the conventional 3-click-cycle spreadsheets
+  // use, minus the third "no sort" state (this table always has one).
+  const toggleSort = (column: SortableColumn) => {
+    if (column === sortBy) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortBy(column);
+      setSortDir("asc");
+    }
+    setPage(1);
+  };
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -167,16 +219,28 @@ function SubscribersTable({ onLoggedOut }: { onLoggedOut: () => void }) {
           <table className="plans-table">
             <thead>
               <tr>
-                <th>Wallet</th>
-                <th>Chain</th>
-                <th>Email</th>
-                <th>Plan</th>
-                <th>Status</th>
-                <th>Renewals</th>
-                <th>Last renewal</th>
-                <th>Activated at</th>
-                <th>Next charge</th>
-                <th>Traffic source</th>
+                <SortableHeader column="wallet_address" label="Wallet" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} />
+                <SortableHeader column="chain_name" label="Chain" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} />
+                <SortableHeader column="email" label="Email" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} />
+                <SortableHeader column="plan_label" label="Plan" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} />
+                <SortableHeader column="status" label="Status" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} />
+                <SortableHeader column="periods_paid" label="Renewals" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} />
+                <SortableHeader
+                  column="last_renewal_result"
+                  label="Last renewal"
+                  sortBy={sortBy}
+                  sortDir={sortDir}
+                  onSort={toggleSort}
+                />
+                <SortableHeader column="activated_at" label="Activated at" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} />
+                <SortableHeader column="next_charge_at" label="Next charge" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} />
+                <SortableHeader
+                  column="traffic_source"
+                  label="Traffic source"
+                  sortBy={sortBy}
+                  sortDir={sortDir}
+                  onSort={toggleSort}
+                />
                 <th>Tx</th>
               </tr>
             </thead>

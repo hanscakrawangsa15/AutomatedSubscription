@@ -312,20 +312,43 @@ app.get("/api/admin/me", (req, res) => {
 const PAGE_SIZE_DEFAULT = 50;
 const PAGE_SIZE_MAX = 200;
 
+// Column names can't go through a `?` placeholder (mysql2 would quote them
+// as a string literal, not an identifier) — allowlisting the exact set the
+// admin table can sort by is what keeps req.query.sortBy safe to interpolate
+// directly into the ORDER BY clause below.
+const SORTABLE_COLUMNS = new Set([
+  "wallet_address",
+  "chain_name",
+  "email",
+  "plan_label",
+  "status",
+  "periods_paid",
+  "last_renewal_result",
+  "activated_at",
+  "next_charge_at",
+  "traffic_source",
+]);
+
 app.get("/api/admin/subscribers", requireAdmin, async (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   const pageSize = Math.min(PAGE_SIZE_MAX, Math.max(1, Number(req.query.pageSize) || PAGE_SIZE_DEFAULT));
   const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
   const offset = (page - 1) * pageSize;
+  const sortBy = SORTABLE_COLUMNS.has(req.query.sortBy) ? req.query.sortBy : "wallet_address";
+  const sortDir = req.query.sortDir === "desc" ? "DESC" : "ASC";
 
   try {
     const where = search ? "WHERE wallet_address LIKE ? OR email LIKE ?" : "";
     const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
 
+    // NULLs (e.g. a wallet with no email, or a row not yet renewed) always
+    // sort last regardless of direction — otherwise DESC would put every
+    // NULL first, which reads as "empty rows on top" rather than useful
+    // sorting.
     const [rows] = await pool.query(
       `SELECT wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, activated_at, status, last_renewal_result
        FROM subscribers ${where}
-       ORDER BY wallet_address, chain_name
+       ORDER BY ${sortBy} IS NULL, ${sortBy} ${sortDir}, wallet_address, chain_name
        LIMIT ? OFFSET ?`,
       [...searchParams, pageSize, offset],
     );

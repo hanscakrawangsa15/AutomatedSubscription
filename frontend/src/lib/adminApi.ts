@@ -60,15 +60,31 @@ export async function adminMe(): Promise<{ loggedIn: boolean; username?: string 
   return { loggedIn: true, username: body?.username };
 }
 
+// Must match server/index.js's SORTABLE_COLUMNS exactly.
+export type SortableColumn =
+  | "wallet_address"
+  | "chain_name"
+  | "email"
+  | "plan_label"
+  | "status"
+  | "periods_paid"
+  | "last_renewal_result"
+  | "activated_at"
+  | "next_charge_at"
+  | "traffic_source";
+
 export async function adminFetchSubscribers(params: {
   page: number;
   pageSize: number;
   search?: string;
+  sortBy?: SortableColumn;
+  sortDir?: "asc" | "desc";
 }): Promise<{ ok: true; data: SubscribersPage } | { ok: false; error: string; unauthorized?: boolean }> {
   const query = new URLSearchParams({
     page: String(params.page),
     pageSize: String(params.pageSize),
     ...(params.search ? { search: params.search } : {}),
+    ...(params.sortBy ? { sortBy: params.sortBy, sortDir: params.sortDir ?? "asc" } : {}),
   });
   const res = await fetch(`${NOTIFY_API_URL}/api/admin/subscribers?${query}`, { credentials: "include" }).catch(
     () => null,
