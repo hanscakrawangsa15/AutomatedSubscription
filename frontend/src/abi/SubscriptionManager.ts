@@ -6,6 +6,9 @@ export const SUBSCRIPTION_MANAGER_ABI = [
   "function planCount() view returns (uint256)",
   "function plans(uint256) view returns (uint256 price, uint256 interval, uint256 gracePeriod, bool active)",
   "function subscriptions(address) view returns (uint256 planId, uint8 status, uint256 nextChargeAt, uint256 overdueSince, uint256 periodsPaid)",
+  "function promos(uint256) view returns (uint256 periods, uint256 successorId)",
+  "function promoPaid(address user, uint256 planId) view returns (uint256)",
+  "function nextCharge(address user) view returns (uint256 planId, uint256 price)",
   "function hasActiveAccess(address user) view returns (bool)",
   "function isDue(address user) view returns (bool)",
 

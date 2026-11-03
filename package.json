@@ -14,6 +14,7 @@
     "keeper:base": "hardhat run scripts/keeper.js --network base",
     "keeper:mainnet": "hardhat run scripts/keeper.js --network mainnet",
     "keeper:bsc": "hardhat run scripts/keeper.js --network bsc",
+    "keeper:bsc-v2": "KEEPER_TOKEN_SUFFIX=_V2 hardhat run scripts/keeper.js --network bsc",
     "keeper:mainnet-usdt": "KEEPER_TOKEN_SUFFIX=_USDT hardhat run scripts/keeper.js --network mainnet",
     "keeper:mainnet-weth": "KEEPER_TOKEN_SUFFIX=_WETH hardhat run scripts/keeper.js --network mainnet",
     "keeper:base-weth": "KEEPER_TOKEN_SUFFIX=_WETH hardhat run scripts/keeper.js --network base",
@@ -27,16 +28,17 @@
   "type": "commonjs",
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
-    "@openzeppelin/contracts": "^5.6.1",
     "@safe-global/protocol-kit": "^8.0.6",
-    "cors": "^2.8.6",
-    "dotenv": "^17.4.2",
-    "express": "^5.2.1",
     "hardhat": "^2.29.0"
   },
   "dependencies": {
+    "@openzeppelin/contracts": "^5.6.1",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "ethers": "^6.17.0",
+    "express": "^5.2.1",
     "jsonwebtoken": "^9.0.2",
     "mysql2": "^3.23.3"
   }

@@ -1,7 +1,16 @@
 import { useEffect, useState } from "react";
 import { fetchPlans, type PlanInfo } from "../lib/plans";
 import { getReadProvider } from "../lib/readProvider";
-import { PRICING_TIERS, priceForCycle, findOnChainPlan, type BillingCycle, type PricingTier } from "../lib/pricingTiers";
+import { PAYMENT_SUFFIX } from "../lib/chains";
+import {
+  CAMPAIGNS,
+  PRICING_TIERS,
+  priceForCycle,
+  findOnChainPlan,
+  type BillingCycle,
+  type CampaignId,
+  type PricingTier,
+} from "../lib/pricingTiers";
 
 // USDT-only, single reference chain — every price shown here is identical
 // in USDT no matter which network the user ends up paying from (both
@@ -12,9 +21,13 @@ import { PRICING_TIERS, priceForCycle, findOnChainPlan, type BillingCycle, type 
 // Ethereum vs BEP-20 on BNB Chain) is chosen afterward, on the Confirm step
 // — see App.tsx's PaymentNetworkStep.
 const REFERENCE_CHAIN_ID = 1; // Ethereum Mainnet
-const REFERENCE_SUFFIX = "_USDT";
+// Partner-discount plans live on the v2 manager, which BNB Chain gets first
+// (docs/bnb-v2-rollout.md), so the /tokocrypto page checks availability there.
+const CAMPAIGN_REFERENCE_CHAIN_ID = 56;
 
 type PricingTiersProps = {
+  /** Partner-discount page (/tokocrypto) — shows the campaign's fixed prices. */
+  campaign?: CampaignId | null;
   refreshKey: number;
   // Passes the tier/cycle alongside the resolved (reference-chain) plan —
   // App.tsx only uses tierId/cycle from this to re-resolve against whichever
@@ -22,7 +35,7 @@ type PricingTiersProps = {
   onSelect: (plan: PlanInfo, tierId: PricingTier["id"], cycle: BillingCycle) => void;
 };
 
-export function PricingTiers({ refreshKey, onSelect }: PricingTiersProps) {
+export function PricingTiers({ campaign = null, refreshKey, onSelect }: PricingTiersProps) {
   const [plans, setPlans] = useState<PlanInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cycle, setCycle] = useState<BillingCycle>("monthly");
@@ -30,13 +43,14 @@ export function PricingTiers({ refreshKey, onSelect }: PricingTiersProps) {
   useEffect(() => {
     setPlans(null);
     setError(null);
-    const provider = getReadProvider(REFERENCE_CHAIN_ID);
+    const referenceChainId = campaign ? CAMPAIGN_REFERENCE_CHAIN_ID : REFERENCE_CHAIN_ID;
+    const provider = getReadProvider(referenceChainId);
     if (!provider) {
-      setError(`No RPC configured for chain ${REFERENCE_CHAIN_ID}`);
+      setError(`No RPC configured for chain ${referenceChainId}`);
       return;
     }
     let cancelled = false;
-    fetchPlans(provider, REFERENCE_CHAIN_ID, REFERENCE_SUFFIX)
+    fetchPlans(provider, referenceChainId, PAYMENT_SUFFIX[referenceChainId] ?? "", campaign !== null)
       .then((loaded) => {
         if (!cancelled) setPlans(loaded);
       })
@@ -46,12 +60,18 @@ export function PricingTiers({ refreshKey, onSelect }: PricingTiersProps) {
     return () => {
       cancelled = true;
     };
-  }, [refreshKey]);
+  }, [refreshKey, campaign]);
 
-  const visibleTiers = PRICING_TIERS.filter((t) => priceForCycle(t, cycle) !== undefined);
+  const campaignInfo = campaign ? CAMPAIGNS[campaign] : null;
+  const visibleTiers = PRICING_TIERS.filter((t) => priceForCycle(t, cycle, campaign) !== undefined);
 
   return (
     <section className="checkout-step pricing-tiers">
+      {campaignInfo && (
+        <p className="pricing-tiers__partner">
+          Xenorize × {campaignInfo.name} — exclusive member pricing
+        </p>
+      )}
       <h2 className="pricing-tiers__title">Give your trading an edge beyond manual clicks 🏦</h2>
       <p className="muted pricing-tiers__subtitle">
         Select a plan that lets advanced bots work alongside your manual trading — tightening your risk control,
@@ -72,18 +92,23 @@ export function PricingTiers({ refreshKey, onSelect }: PricingTiersProps) {
           Pay Monthly
         </button>
         <button className={cycle === "yearly" ? "active" : ""} onClick={() => setCycle("yearly")}>
-          Pay Annually <span className="billing-toggle__badge">20% OFF</span>
+          Pay Annually {!campaignInfo && <span className="billing-toggle__badge">20% OFF</span>}
         </button>
       </div>
 
       <div className="pricing-grid">
         {visibleTiers.map((tier) => {
-          const price = priceForCycle(tier, cycle)!;
-          const onChainPlan = findOnChainPlan(plans, tier, cycle);
+          const price = priceForCycle(tier, cycle, campaign)!;
+          const normalPrice = campaign ? priceForCycle(tier, cycle) : undefined;
+          const onChainPlan = findOnChainPlan(plans, tier, cycle, campaign);
           const loading = !plans && !error;
           return (
-            <div key={tier.id} className={`pricing-card ${tier.bestDeal ? "pricing-card--best-deal" : ""}`}>
+            <div
+              key={tier.id}
+              className={`pricing-card ${tier.bestDeal ? "pricing-card--best-deal" : ""} ${campaignInfo ? "pricing-card--promo" : ""}`}
+            >
               {tier.bestDeal && <div className="pricing-card__ribbon">🏷️ BEST DEAL</div>}
+              {campaignInfo && <div className="pricing-card__corner">{campaignInfo.ribbon}</div>}
               <div className="pricing-card__header">
                 <h3>
                   {tier.name} ({cycle})
@@ -91,6 +116,7 @@ export function PricingTiers({ refreshKey, onSelect }: PricingTiersProps) {
                 <span className="pricing-card__icon">{tier.icon}</span>
               </div>
               <div className="pricing-card__price">
+                {normalPrice !== undefined && <del className="pricing-card__was">${normalPrice.toFixed(2)}</del>}
                 ${price.toFixed(2)}
                 <span>/{cycle === "monthly" ? "month" : "year"}</span>
               </div>
@@ -111,6 +137,13 @@ export function PricingTiers({ refreshKey, onSelect }: PricingTiersProps) {
           );
         })}
       </div>
+
+      {campaignInfo && (
+        <p className="muted" style={{ textAlign: "center" }}>
+          Monthly plans keep the {campaignInfo.name} price for your first 12 payments; the yearly {campaignInfo.name}{" "}
+          price applies to your first year only. After that your plan renews automatically at the regular price.
+        </p>
+      )}
 
       <p className="muted pricing-tiers__footer">
         Need Help? Contact <a href="mailto:support@xenorize.com">support@xenorize.com</a>

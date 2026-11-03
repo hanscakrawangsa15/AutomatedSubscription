@@ -9,10 +9,10 @@ import { PaymentNetworkStep } from "./components/PaymentNetworkStep";
 import { ConfirmSubscription } from "./components/ConfirmSubscription";
 import { ManageSubscription } from "./components/ManageSubscription";
 import { getSubscriptionManager, getPaymentMethods, isChainDeployed } from "./lib/contracts";
-import { SUPPORTED_CHAINS, ETH_MAINNET, BSC_MAINNET, getChainName } from "./lib/chains";
+import { SUPPORTED_CHAINS, ETH_MAINNET, BSC_MAINNET, PAYMENT_SUFFIX, getChainName } from "./lib/chains";
 import { lookupSubscriptionsByWallet, type DbSubscriptionRow } from "./lib/notify";
 import type { PlanInfo } from "./lib/plans";
-import type { BillingCycle, PricingTier } from "./lib/pricingTiers";
+import type { BillingCycle, CampaignId, PricingTier } from "./lib/pricingTiers";
 
 const ACTIVE = 1;
 const OVERDUE = 2;
@@ -27,9 +27,9 @@ const ANY_CHAIN_CONFIGURED = SUPPORTED_CHAINS.some((c) => isChainDeployed(Number
 // USDT subscriptions), corrected by the real on-chain check that still
 // runs in the background — a legacy subscriber briefly sees the wrong
 // guess corrected a moment later, never an actually-wrong final state.
-const DEFAULT_SUFFIX_BY_CHAIN: Record<number, string> = { 1: "_USDT", 56: "" };
+const DEFAULT_SUFFIX_BY_CHAIN = PAYMENT_SUFFIX;
 
-function App() {
+function App({ campaign = null }: { campaign?: CampaignId | null }) {
   const { signer, account, chainId, connecting, reconnecting, error, connect, disconnect } = useAppKitWallet();
   const { switchNetwork } = useAppKitNetwork();
   const [refreshKey, setRefreshKey] = useState(0);
@@ -258,6 +258,7 @@ function App() {
             />
           ) : !selectedTier ? (
             <PricingTiers
+              campaign={campaign}
               refreshKey={refreshKey}
               onSelect={(_plan, tierId, cycle) => setSelectedTier({ tierId, cycle })}
             />
@@ -265,6 +266,7 @@ function App() {
             <PaymentNetworkStep
               tierId={selectedTier.tierId}
               cycle={selectedTier.cycle}
+              campaign={campaign}
               chainId={chainId}
               onResolved={setSelectedPlan}
               onBack={backToPlans}

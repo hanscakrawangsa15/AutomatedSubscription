@@ -740,6 +740,52 @@ button.secondary:hover:not(:disabled) {
   color: var(--color-purple);
 }
 
+.pricing-card--promo {
+  border-color: var(--color-teal-end);
+}
+
+/* Diagonal corner ribbon (top-right) for the partner discount. */
+.pricing-card__corner {
+  position: absolute;
+  top: 24px;
+  right: -40px;
+  width: 150px;
+  padding: 5px 0;
+  transform: rotate(45deg);
+  background: linear-gradient(90deg, var(--color-teal-start), var(--color-teal-end));
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-align: center;
+  white-space: nowrap;
+  /* White outline keeps the ribbon distinct where it crosses the green BEST DEAL bar. */
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9), 0 2px 6px rgba(26, 111, 92, 0.35);
+  z-index: 1;
+}
+
+/* Keep the tier icon clear of the corner ribbon. */
+.pricing-card--promo .pricing-card__icon {
+  margin-right: 38px;
+}
+
+.pricing-card__was {
+  margin-right: 8px;
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+
+.pricing-tiers__partner {
+  margin: 0 0 4px;
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-teal-start);
+}
+
 .pricing-card__price span {
   font-size: 0.85rem;
   font-weight: 500;

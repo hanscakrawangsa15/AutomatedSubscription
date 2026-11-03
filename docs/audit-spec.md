@@ -68,6 +68,32 @@ The two **recovery** paths (`payNow`, `retryCharge`) reset from
 from a lapsed/overdue state starts their next cycle from when they actually
 paid, not from a stale pre-lapse schedule.
 
+## v2 change: renewal lead time (`Plan.leadTime`)
+
+Delta against the audited v1 contract — everything else is unchanged:
+
+1. `Plan` gains a trailing `uint256 leadTime` (trailing, so the public `plans()`
+   getter's first four outputs stay ABI-compatible with v1 readers).
+   `createPlan(price, interval, gracePeriod, leadTime)` requires
+   `leadTime < interval`.
+2. `subscribe`, `payNow`, `retryCharge` set
+   `nextChargeAt = block.timestamp + interval - leadTime` (period still lasts
+   `interval`; the renewal charge window opens `leadTime` before it ends).
+   `chargeDue`'s success path is unchanged (`nextChargeAt += interval`).
+3. `chargeDue` on insufficient balance/allowance: still emits `ChargeFailed`
+   and never reverts, but only moves the user to `Overdue` once
+   `block.timestamp >= nextChargeAt + leadTime` (the paid period's end). Before
+   that the user stays `Active`. With `leadTime = 0` this is identical to v1.
+   **Why:** `chargeDue` is permissionless; without this a third party could call
+   it while a user's balance is momentarily low and push them to
+   `Overdue`/`Expired` before the keeper's retries.
+4. The "3 attempts, one per day" policy is enforced off-chain by the keeper, not
+   by the contract. The contract only guarantees that nobody can end the
+   subscription before the period end, and that anyone may charge a funded user
+   from `nextChargeAt` on.
+
+Production plans use `leadTime = 2 days`, `gracePeriod = 0` (monthly and yearly).
+
 ## Trust assumptions
 
 - **`owner` is a single EOA at initial deploy, moved to a Safe multisig
@@ -170,3 +196,16 @@ paid, not from a stale pre-lapse schedule.
 `TESTING.md` — 29 tests, 100% statement/line/function coverage,
 88.75% branch coverage on `SubscriptionManager.sol`, plus real gas figures
 per function.
+
+
+## v2 change: partner promo pricing (`setPromo`)
+
+Adds, without changing any existing function signature or the `plans()` / `subscriptions()` getters:
+
+- `Promo { periods, successorId }`, `promos(planId)`, `isPromoSuccessor(planId)`, `promoPaid(user, planId)`, `nextCharge(user)` (view), `setPromo(planId, successorId, periods)` (owner), event `PromoSet`.
+- Billing resolves the plan to charge as `_billingPlanId(user, sub.planId)`: the sub's plan while `promoPaid[user][planId] < periods`, else its `successorId`. All four charge paths (`subscribe`, `payNow`, `chargeDue`, `retryCharge`) charge that plan's price, then write `sub.planId = billed plan` and increment `promoPaid` when the billed plan is a promo plan. The switch is therefore lazy: `sub.planId` is the plan most recently PAID, `nextCharge()` is the plan the next charge will use.
+- `setPromo` invariants: owner-only; set once per plan; no chains (a promo cannot be a successor, a successor cannot be a promo); promo and successor must have equal `interval`, `leadTime` and `gracePeriod` (no schedule shift at the switch); successor price >= promo price; `periods > 0`.
+- `subscribe(promoPlan)` reverts `promo already used` once the wallet's `promoPaid` reached `periods`. `promoPaid` is never reset (survives cancel/re-subscribe), so the discount cannot be renewed by cancelling.
+- Unfunded checks (`ChargeFailed`, `retryCharge`, keeper pre-check via `nextCharge`) use the price of the plan that WOULD be billed, i.e. the normal price once the promo is spent.
+- Not access-controlled: any address may subscribe to an active promo plan (once). Restricting it needs a signed-voucher check, intentionally not included.
+- A deactivated promo plan (`setPlanActive(id,false)`) only blocks new `subscribe`; existing subscribers' charges and the switch to the successor are unaffected (charges never check `active`).

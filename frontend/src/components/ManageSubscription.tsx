@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { type JsonRpcSigner } from "ethers";
+import { formatUnits, type JsonRpcSigner } from "ethers";
 import { getMockUsdc, getSubscriptionManager } from "../lib/contracts";
 import { SUBSCRIPTION_STATUS } from "../abi/SubscriptionManager";
 import { classifyInterval, formatDuration } from "../lib/plans";
@@ -8,7 +8,7 @@ import { useRenewalLog } from "../hooks/useRenewalLog";
 import { reportSubscription } from "../lib/notify";
 import { getChainSlug, getChainName } from "../lib/chains";
 import { waitForTx } from "../lib/waitForTx";
-import { tierLabelForPlanId } from "../lib/pricingTiers";
+import { campaignForPlanPrice, tierLabelForPlan } from "../lib/pricingTiers";
 
 const PLAN_LABELS: Record<string, string> = { monthly: "Monthly", yearly: "Yearly", test: "Test" };
 
@@ -34,6 +34,8 @@ type SubInfo = {
   planLabel: string;
   intervalSeconds: number;
   tokenSymbol: string;
+  /** Price of the NEXT charge when it differs from this plan's (partner promo ending). */
+  nextPrice?: string;
 };
 
 function formatTimestamp(ts: number) {
@@ -57,19 +59,33 @@ export function ManageSubscription({
   const load = useCallback(async () => {
     const manager = getSubscriptionManager(signer, chainId, tokenSuffix);
     const usdc = getMockUsdc(signer, chainId, tokenSuffix);
-    const [sub, symbol] = await Promise.all([manager.subscriptions(account), usdc.symbol()]);
+    const [sub, symbol, decimals] = await Promise.all([manager.subscriptions(account), usdc.symbol(), usdc.decimals()]);
     const plan = await manager.plans(sub.planId);
     const intervalSeconds = Number(plan.interval);
     const kind = classifyInterval(intervalSeconds / 86400);
+    // A partner-discount plan switches to the regular price automatically once
+    // its discounted payments are used up — show what the next charge will
+    // actually be. Only asked for on promo plans (one extra read, v2 only).
+    let nextPrice: string | undefined;
+    if (campaignForPlanPrice(formatUnits(plan.price, decimals), kind)) {
+      try {
+        const next = await manager.nextCharge(account);
+        if (next.price !== plan.price) nextPrice = formatUnits(next.price, decimals);
+      } catch {
+        /* manager without nextCharge() — nothing to add */
+      }
+    }
     setInfo({
       planId: Number(sub.planId),
       status: Number(sub.status),
       nextChargeAt: Number(sub.nextChargeAt),
       overdueSince: Number(sub.overdueSince),
       periodsPaid: Number(sub.periodsPaid),
-      planLabel: tierLabelForPlanId(Number(sub.planId)) ?? PLAN_LABELS[kind] ?? `Plan #${sub.planId}`,
+      planLabel:
+        tierLabelForPlan(Number(sub.planId), formatUnits(plan.price, decimals), kind) ?? PLAN_LABELS[kind] ?? `Plan #${sub.planId}`,
       intervalSeconds,
       tokenSymbol: symbol,
+      nextPrice,
     });
   }, [signer, account, chainId, tokenSuffix]);
 
@@ -126,6 +142,7 @@ export function ManageSubscription({
   ) => {
     const sub = await manager.subscriptions(account);
     const plan = await manager.plans(sub.planId);
+    const decimals = await getMockUsdc(signer, chainId, tokenSuffix).decimals();
     const kind = classifyInterval(Number(plan.interval) / 86400);
     const activatedAt = receipt ? Number((await receipt.getBlock()).timestamp) : undefined;
     await reportSubscription({
@@ -133,7 +150,7 @@ export function ManageSubscription({
       chainName: getChainSlug(chainId),
       chainId: Number(chainId),
       planId: Number(sub.planId),
-      planLabel: tierLabelForPlanId(Number(sub.planId)) ?? PLAN_LABELS[kind] ?? kind,
+      planLabel: tierLabelForPlan(Number(sub.planId), formatUnits(plan.price, decimals), kind) ?? PLAN_LABELS[kind] ?? kind,
       txHash,
       periodsPaid: Number(sub.periodsPaid),
       nextChargeAt: Number(sub.nextChargeAt),
@@ -190,6 +207,14 @@ export function ManageSubscription({
           <span>Next charge</span>
           <strong>{formatTimestamp(info.nextChargeAt)}</strong>
         </div>
+        {info.nextPrice && (
+          <div className="summary-row">
+            <span>Next charge amount</span>
+            <strong>
+              {info.nextPrice} {info.tokenSymbol} (regular price)
+            </strong>
+          </div>
+        )}
         <div className="summary-row">
           <span>Periods paid</span>
           <strong>{info.periodsPaid}</strong>

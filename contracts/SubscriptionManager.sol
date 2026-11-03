@@ -17,9 +17,18 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  * Alur:
  *  1. User approve(token, thisContract, cukupUntukBeberapaBulan)
  *  2. User subscribe(planId)               <- konfirmasi awal, sekali saja
- *  3. Keeper panggil chargeDue(user) tiap siklus jatuh tempo
- *  4. Jika allowance/saldo user tidak cukup -> subscription masuk status
- *     Overdue, ada grace period, lalu auto-expire kalau tidak dibayar
+ *  3. Keeper panggil chargeDue(user) saat jendela penagihan terbuka, yaitu
+ *     `leadTime` detik SEBELUM periode berjalan berakhir (mis. 2 hari)
+ *  4. Selama jendela itu (dari nextChargeAt sampai akhir periode) user yang
+ *     belum cukup saldo/allowance TIDAK dipindah ke Overdue — keeper boleh
+ *     mencoba lagi (mis. 3 kali, sekali sehari). Begitu periode berakhir dan
+ *     tetap gagal -> Overdue, lalu Expired setelah grace period (0 hari
+ *     artinya langsung bisa di-expire).
+ *
+ * Jadwal: periode pertama berjalan dari subscribe() sampai +interval.
+ * Tagihan berikutnya jatuh di (akhir periode - leadTime), lalu maju
+ * +interval tiap siklus (fixed schedule). leadTime = 0 berperilaku persis
+ * seperti versi sebelumnya (tagih tepat di akhir periode).
  */
 contract SubscriptionManager is Ownable, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
@@ -40,6 +49,21 @@ contract SubscriptionManager is Ownable, ReentrancyGuard, Pausable {
         uint256 interval;       // panjang periode dalam detik (mis. 30 days)
         uint256 gracePeriod;    // toleransi keterlambatan sebelum Expired
         bool active;            // admin bisa nonaktifkan plan baru, subscriber lama tetap jalan
+        // Ditaruh PALING AKHIR supaya getter plans(id) tetap kompatibel dengan
+        // ABI lama (price, interval, gracePeriod, active) — frontend/keeper/
+        // server yang membaca 4 field pertama tetap jalan terhadap kontrak ini.
+        uint256 leadTime;       // detik sebelum akhir periode saat penagihan renewal boleh mulai (0 = tepat di akhir periode)
+    }
+
+    /**
+     * Promo (harga kerja sama): plan promo menagih harganya sendiri untuk
+     * `periods` pembayaran pertama PER ALAMAT, lalu tagihan berikutnya otomatis
+     * memakai `successorId` (plan harga normal) tanpa user melakukan apa pun.
+     * Contoh: promo bulanan periods=12, promo tahunan periods=1.
+     */
+    struct Promo {
+        uint256 periods;        // 0 = bukan plan promo
+        uint256 successorId;    // plan yang ditagih setelah periods habis
     }
 
     struct Subscription {
@@ -65,12 +89,20 @@ contract SubscriptionManager is Ownable, ReentrancyGuard, Pausable {
 
     mapping(address => Subscription) public subscriptions;
 
+    mapping(uint256 => Promo) public promos;
+    mapping(uint256 => bool) public isPromoSuccessor;
+    // Jumlah pembayaran promo yang SUDAH dipakai per (alamat, plan promo).
+    // Sengaja tidak pernah di-reset (bertahan lewat cancel -> subscribe ulang)
+    // supaya diskon tidak bisa diperpanjang dengan cancel lalu beli lagi.
+    mapping(address => mapping(uint256 => uint256)) public promoPaid;
+
     // ---------------------------------------------------------------
     // Events
     // ---------------------------------------------------------------
 
-    event PlanCreated(uint256 indexed planId, uint256 price, uint256 interval, uint256 gracePeriod);
+    event PlanCreated(uint256 indexed planId, uint256 price, uint256 interval, uint256 gracePeriod, uint256 leadTime);
     event PlanUpdated(uint256 indexed planId, bool active);
+    event PromoSet(uint256 indexed planId, uint256 indexed successorId, uint256 periods);
     event Subscribed(address indexed user, uint256 indexed planId, uint256 nextChargeAt);
     event Charged(address indexed user, uint256 indexed planId, uint256 amount, uint256 nextChargeAt);
     event ChargeFailed(address indexed user, uint256 indexed planId, string reason);
@@ -100,22 +132,58 @@ contract SubscriptionManager is Ownable, ReentrancyGuard, Pausable {
     function createPlan(
         uint256 price,
         uint256 interval,
-        uint256 gracePeriod
+        uint256 gracePeriod,
+        uint256 leadTime
     ) external onlyOwner returns (uint256 planId) {
         require(price > 0, "price=0");
         // Floor lowered from 1 days to 1 minutes to allow a fast-interval
         // plan for local testing (e.g. a 3-minute renewal cycle).
         require(interval >= 1 minutes, "interval too short");
+        // Jendela penagihan harus selalu dimulai SETELAH subscribe()
+        // (nextChargeAt = now + interval - leadTime harus di masa depan).
+        require(leadTime < interval, "lead >= interval");
 
         planId = planCount++;
         plans[planId] = Plan({
             price: price,
             interval: interval,
             gracePeriod: gracePeriod,
-            active: true
+            active: true,
+            leadTime: leadTime
         });
 
-        emit PlanCreated(planId, price, interval, gracePeriod);
+        emit PlanCreated(planId, price, interval, gracePeriod, leadTime);
+    }
+
+    /**
+     * @notice Jadikan `planId` plan promo: setelah `periods` pembayaran per
+     *         alamat, tagihan pindah ke `successorId`. Hanya bisa diset SEKALI
+     *         per plan (harga/aturan promo tidak bisa diubah diam-diam setelah
+     *         ada subscriber). Kampanye diskon baru = createPlan + setPromo
+     *         baru, tanpa deploy ulang.
+     * @dev Jadwal (interval, leadTime, grace) harus sama supaya perpindahan ke
+     *      plan normal tidak menggeser jadwal tagihan, dan successor tidak
+     *      boleh lebih murah dari plan promo. Rantai promo dilarang.
+     */
+    function setPromo(uint256 planId, uint256 successorId, uint256 periods) external onlyOwner {
+        require(planId < planCount && successorId < planCount, "invalid plan");
+        require(planId != successorId, "same plan");
+        require(periods > 0, "periods=0");
+        require(promos[planId].periods == 0, "promo already set");
+        require(promos[successorId].periods == 0, "successor is promo");
+        require(!isPromoSuccessor[planId], "plan is a successor");
+
+        Plan storage promo = plans[planId];
+        Plan storage next = plans[successorId];
+        require(
+            promo.interval == next.interval && promo.leadTime == next.leadTime && promo.gracePeriod == next.gracePeriod,
+            "schedule mismatch"
+        );
+        require(next.price >= promo.price, "successor cheaper");
+
+        promos[planId] = Promo({periods: periods, successorId: successorId});
+        isPromoSuccessor[successorId] = true;
+        emit PromoSet(planId, successorId, periods);
     }
 
     function setPlanActive(uint256 planId, bool active) external onlyOwner {
@@ -182,17 +250,25 @@ contract SubscriptionManager is Ownable, ReentrancyGuard, Pausable {
 
         Subscription storage sub = subscriptions[msg.sender];
         require(sub.status != Status.Active && sub.status != Status.Overdue, "already subscribed");
+        // Diskon promo hanya sekali per alamat: kalau jatahnya sudah habis,
+        // user beli plan harga normal (revert, bukan diam-diam ditagih lain,
+        // supaya harga yang tampil di UI = harga yang ditagih).
+        Promo memory promo = promos[planId];
+        require(promo.periods == 0 || promoPaid[msg.sender][planId] < promo.periods, "promo already used");
 
         // Tarik pembayaran periode pertama langsung (di transaksi yang sama)
         paymentToken.safeTransferFrom(msg.sender, treasury, plan.price);
 
         sub.planId = planId;
         sub.status = Status.Active;
-        // block.timestamp di sini jadi "titik nol" siklus; charge berikutnya
-        // dihitung dari sini secara fixed-schedule (lihat chargeDue/retryCharge)
-        sub.nextChargeAt = block.timestamp + plan.interval;
+        // block.timestamp di sini jadi "titik nol" siklus; periode pertama
+        // berakhir di +interval dan jendela penagihan renewal terbuka
+        // leadTime sebelumnya. Charge berikutnya dihitung dari sini secara
+        // fixed-schedule (lihat chargeDue/retryCharge)
+        sub.nextChargeAt = block.timestamp + plan.interval - plan.leadTime;
         sub.overdueSince = 0;
         sub.periodsPaid += 1;
+        _recordPromoPayment(msg.sender, planId);
 
         emit Subscribed(msg.sender, planId, sub.nextChargeAt);
         emit Charged(msg.sender, planId, plan.price, sub.nextChargeAt);
@@ -218,20 +294,24 @@ contract SubscriptionManager is Ownable, ReentrancyGuard, Pausable {
     function payNow() external nonReentrant whenNotPaused {
         Subscription storage sub = subscriptions[msg.sender];
         require(sub.status == Status.Overdue, "not overdue");
-        Plan memory plan = plans[sub.planId];
+        uint256 billId = _billingPlanId(msg.sender, sub.planId);
+        Plan memory plan = plans[billId];
 
         paymentToken.safeTransferFrom(msg.sender, treasury, plan.price);
+        sub.planId = billId;
+        _recordPromoPayment(msg.sender, billId);
 
         sub.status = Status.Active;
         sub.overdueSince = 0;
         // Recovery path: reset dari waktu bayar (bukan nextChargeAt lama),
         // supaya user yang baru saja bayar tidak langsung dianggap due lagi
-        // kalau overdue-nya sudah berlangsung lama.
-        sub.nextChargeAt = block.timestamp + plan.interval;
+        // kalau overdue-nya sudah berlangsung lama. Periode baru berakhir di
+        // +interval; jendela renewal-nya terbuka leadTime sebelum itu.
+        sub.nextChargeAt = block.timestamp + plan.interval - plan.leadTime;
         sub.periodsPaid += 1;
 
         emit Reactivated(msg.sender, sub.nextChargeAt);
-        emit Charged(msg.sender, sub.planId, plan.price, sub.nextChargeAt);
+        emit Charged(msg.sender, billId, plan.price, sub.nextChargeAt);
     }
 
     // ---------------------------------------------------------------
@@ -240,25 +320,43 @@ contract SubscriptionManager is Ownable, ReentrancyGuard, Pausable {
 
     /**
      * @notice Dipanggil oleh keeper (bot/cron/Chainlink Automation/Gelato)
-     *         saat subscription jatuh tempo. Siapa pun boleh memanggil ini
-     *         (permissionless) — insentif kecil opsional lewat keeperRewardBps.
+     *         saat jendela penagihan terbuka (nextChargeAt). Siapa pun boleh
+     *         memanggil ini (permissionless) — insentif kecil opsional lewat
+     *         keeperRewardBps.
+     * @dev Kalau saldo/allowance kurang, SELAMA jendela masih berjalan
+     *      (sebelum nextChargeAt + leadTime = akhir periode) fungsi ini hanya
+     *      mengemit ChargeFailed dan membiarkan user tetap Active, supaya
+     *      keeper bisa mencoba lagi di hari berikutnya. Tanpa ini siapa pun
+     *      bisa memanggil chargeDue di saat saldo user sedang kurang dan
+     *      langsung menjatuhkannya ke Overdue/Expired. Setelah akhir periode,
+     *      kegagalan -> Overdue. Dengan leadTime = 0, akhir periode =
+     *      nextChargeAt sehingga perilakunya sama dengan versi sebelumnya.
      */
     function chargeDue(address user) external nonReentrant whenNotPaused {
         Subscription storage sub = subscriptions[user];
         require(sub.status == Status.Active, "not active");
         require(block.timestamp >= sub.nextChargeAt, "not due yet");
 
-        Plan memory plan = plans[sub.planId];
+        uint256 billId = _billingPlanId(user, sub.planId);
+        Plan memory plan = plans[billId];
 
         uint256 allowance = paymentToken.allowance(user, address(this));
         uint256 balance = paymentToken.balanceOf(user);
 
         if (allowance < plan.price || balance < plan.price) {
-            // Gagal charge -> masuk grace period, JANGAN revert supaya
-            // keeper batch job tidak stuck di satu user yang gagal
+            // Gagal charge -> JANGAN revert supaya keeper batch job tidak
+            // stuck di satu user yang gagal
+            emit ChargeFailed(user, sub.planId, allowance < plan.price ? "insufficient allowance" : "insufficient balance");
+
+            // Masih di dalam jendela renewal (periode berbayar belum
+            // berakhir): biarkan Active, keeper akan mencoba lagi.
+            if (block.timestamp < sub.nextChargeAt + plan.leadTime) {
+                return;
+            }
+
+            // Periode sudah berakhir dan tetap gagal -> Overdue (grace period)
             sub.status = Status.Overdue;
             sub.overdueSince = block.timestamp;
-            emit ChargeFailed(user, sub.planId, allowance < plan.price ? "insufficient allowance" : "insufficient balance");
             emit MarkedOverdue(user, block.timestamp);
             return;
         }
@@ -275,8 +373,11 @@ contract SubscriptionManager is Ownable, ReentrancyGuard, Pausable {
         // keeper benar-benar trigger, supaya jadwal tidak drift kalau keeper telat
         sub.nextChargeAt = sub.nextChargeAt + plan.interval;
         sub.periodsPaid += 1;
+        // Promo habis -> plan user pindah ke plan normal (lihat _billingPlanId)
+        sub.planId = billId;
+        _recordPromoPayment(user, billId);
 
-        emit Charged(user, sub.planId, plan.price, sub.nextChargeAt);
+        emit Charged(user, billId, plan.price, sub.nextChargeAt);
     }
 
     /**
@@ -304,27 +405,57 @@ contract SubscriptionManager is Ownable, ReentrancyGuard, Pausable {
     function retryCharge(address user) external nonReentrant whenNotPaused {
         Subscription storage sub = subscriptions[user];
         require(sub.status == Status.Overdue, "not overdue");
-        Plan memory plan = plans[sub.planId];
+        uint256 billId = _billingPlanId(user, sub.planId);
+        Plan memory plan = plans[billId];
 
         uint256 allowance = paymentToken.allowance(user, address(this));
         uint256 balance = paymentToken.balanceOf(user);
         require(allowance >= plan.price && balance >= plan.price, "still insufficient");
 
         paymentToken.safeTransferFrom(user, treasury, plan.price);
+        sub.planId = billId;
+        _recordPromoPayment(user, billId);
 
         sub.status = Status.Active;
         sub.overdueSince = 0;
         // Recovery path, sama seperti payNow: reset dari waktu bayar
-        sub.nextChargeAt = block.timestamp + plan.interval;
+        sub.nextChargeAt = block.timestamp + plan.interval - plan.leadTime;
         sub.periodsPaid += 1;
 
         emit Reactivated(user, sub.nextChargeAt);
-        emit Charged(user, sub.planId, plan.price, sub.nextChargeAt);
+        emit Charged(user, billId, plan.price, sub.nextChargeAt);
+    }
+
+    // ---------------------------------------------------------------
+    // Promo helpers
+    // ---------------------------------------------------------------
+
+    /// Plan yang dipakai untuk tagihan BERIKUTNYA user ini: plan promonya
+    /// selama jatah promo belum habis, setelah itu plan penerusnya.
+    function _billingPlanId(address user, uint256 planId) internal view returns (uint256) {
+        Promo memory promo = promos[planId];
+        if (promo.periods != 0 && promoPaid[user][planId] >= promo.periods) {
+            return promo.successorId;
+        }
+        return planId;
+    }
+
+    function _recordPromoPayment(address user, uint256 planId) internal {
+        if (promos[planId].periods != 0) {
+            promoPaid[user][planId] += 1;
+        }
     }
 
     // ---------------------------------------------------------------
     // View helpers
     // ---------------------------------------------------------------
+
+    /// Plan + harga yang akan ditagih pada pembayaran berikutnya user ini
+    /// (berbeda dari subscriptions(user).planId begitu jatah promo habis).
+    function nextCharge(address user) external view returns (uint256 planId, uint256 price) {
+        planId = _billingPlanId(user, subscriptions[user].planId);
+        price = plans[planId].price;
+    }
 
     function hasActiveAccess(address user) external view returns (bool) {
         Subscription memory sub = subscriptions[user];

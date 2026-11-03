@@ -8,7 +8,7 @@ import { getChainSlug } from "../lib/chains";
 import { getTrafficSource, getEmailFromUrl } from "../lib/trafficSource";
 import { useToast } from "./Toast";
 import { waitForTx } from "../lib/waitForTx";
-import { tierLabelForPlanId } from "../lib/pricingTiers";
+import { tierLabelForPlan } from "../lib/pricingTiers";
 
 const PLAN_LABELS: Record<string, string> = { monthly: "Monthly", yearly: "Yearly", test: "Test" };
 
@@ -59,6 +59,11 @@ export function ConfirmSubscription({
   const showToast = useToast();
 
   const managerAddress = getChainAddresses(chainId, plan.tokenSuffix)?.manager;
+  // A partner-discount plan later bills its (higher) normal-price successor
+  // from the same allowance, so the cap is sized for that price — otherwise
+  // the first normal-price renewal could fail on "insufficient allowance".
+  const capUnitRaw = plan.promo && plan.promo.successorPriceRaw > plan.priceRaw ? plan.promo.successorPriceRaw : plan.priceRaw;
+  const successorPrice = plan.promo ? formatUnits(plan.promo.successorPriceRaw, plan.decimals) : null;
 
   useEffect(() => {
     if (!managerAddress) {
@@ -67,11 +72,20 @@ export function ConfirmSubscription({
       return;
     }
     let cancelled = false;
-    getMockUsdc(signer, chainId, plan.tokenSuffix)
-      .allowance(account, managerAddress)
-      .then((allowance: bigint) => {
+    // The discount is once per wallet (the contract reverts otherwise) — say so
+    // up front instead of letting the user approve and then fail on subscribe().
+    const promoCheck: Promise<bigint> = plan.promo
+      ? getSubscriptionManager(signer, chainId, plan.tokenSuffix).promoPaid(account, plan.id)
+      : Promise.resolve(0n);
+    Promise.all([getMockUsdc(signer, chainId, plan.tokenSuffix).allowance(account, managerAddress), promoCheck])
+      .then(([allowance, promoPaid]: [bigint, bigint]) => {
         if (cancelled) return;
-        const target = plan.priceRaw * PERIODS_TO_APPROVE;
+        if (plan.promo && promoPaid >= BigInt(plan.promo.periods)) {
+          setErrorMsg("This wallet has already used its discounted payments for this plan. Choose the regular plan instead.");
+          setStep("error");
+          return;
+        }
+        const target = capUnitRaw * PERIODS_TO_APPROVE;
         setNeedsApproval(allowance < target);
         setNeedsReset(allowance > 0n && allowance < target);
         setStep("ready");
@@ -84,7 +98,7 @@ export function ConfirmSubscription({
     return () => {
       cancelled = true;
     };
-  }, [signer, account, chainId, managerAddress, plan.priceRaw, plan.tokenSuffix]);
+  }, [signer, account, chainId, managerAddress, capUnitRaw, plan.id, plan.promo, plan.tokenSuffix]);
 
   const confirmAndSubscribe = async () => {
     if (!managerAddress || !emailValid) return;
@@ -97,7 +111,7 @@ export function ConfirmSubscription({
           const resetTx = await usdc.approve(managerAddress, 0n);
           await waitForTx(resetTx, chainId);
         }
-        const tx = await usdc.approve(managerAddress, plan.priceRaw * PERIODS_TO_APPROVE);
+        const tx = await usdc.approve(managerAddress, capUnitRaw * PERIODS_TO_APPROVE);
         await waitForTx(tx, chainId);
       }
 
@@ -120,7 +134,7 @@ export function ConfirmSubscription({
         email,
         trafficSource: getTrafficSource(),
         planId: plan.id,
-        planLabel: tierLabelForPlanId(plan.id) ?? PLAN_LABELS[plan.kind] ?? plan.kind,
+        planLabel: tierLabelForPlan(plan.id, plan.price, plan.kind) ?? PLAN_LABELS[plan.kind] ?? plan.kind,
         txHash: tx.hash,
         amountLabel: `${plan.price} ${plan.tokenSymbol}`,
         intervalLabel: `every ${formatDuration(plan.intervalSeconds)}`,
@@ -148,7 +162,7 @@ export function ConfirmSubscription({
   // Precise bigint-based formatting, not Number(plan.price) * N — that loses
   // precision for tokens with small fractional prices (e.g. WETH plans
   // priced at ~0.005 tokens), where toFixed(2) rounded 0.015735 to "0.02".
-  const approveCapDisplay = formatUnits(plan.priceRaw * PERIODS_TO_APPROVE, plan.decimals);
+  const approveCapDisplay = formatUnits(capUnitRaw * PERIODS_TO_APPROVE, plan.decimals);
 
   return (
     <section className="checkout-step">
@@ -157,7 +171,7 @@ export function ConfirmSubscription({
       <div className="summary-card">
         <div className="summary-row">
           <span>Plan</span>
-          <strong>{tierLabelForPlanId(plan.id) ?? PLAN_LABELS[plan.kind] ?? `Plan #${plan.id}`}</strong>
+          <strong>{tierLabelForPlan(plan.id, plan.price, plan.kind) ?? PLAN_LABELS[plan.kind] ?? `Plan #${plan.id}`}</strong>
         </div>
         <div className="summary-row">
           <span>Price</span>
@@ -165,6 +179,14 @@ export function ConfirmSubscription({
             {plan.price} {plan.tokenSymbol}
           </strong>
         </div>
+        {plan.promo && successorPrice && (
+          <div className="summary-row">
+            <span>Then</span>
+            <strong>
+              {successorPrice} {plan.tokenSymbol} after {plan.promo.periods} {plan.promo.periods === 1 ? "payment" : "payments"}
+            </strong>
+          </div>
+        )}
         <div className="summary-row">
           <span>Billing interval</span>
           <strong>every {formatDuration(plan.intervalSeconds)}</strong>

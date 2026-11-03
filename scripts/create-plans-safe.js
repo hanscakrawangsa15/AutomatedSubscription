@@ -2,6 +2,8 @@
 // on a SubscriptionManager instance, via a single batched Safe multisig
 // transaction. Reusable for every chain/token combination — not a one-off.
 //
+// Add DRY_RUN=1 to print everything and run all checks without signing/sending.
+//
 // Usage: SAFE_ADDRESS=0x... MANAGER_ADDRESS=0x... npx hardhat run scripts/create-plans-safe.js --network <name>
 //
 // Only supports 1-of-N Safes (a single owner's signature already meets
@@ -15,14 +17,28 @@ const Safe = require("@safe-global/protocol-kit").default;
 const DAY = 24 * 60 * 60;
 
 // Mirrors frontend/src/lib/pricingTiers.ts's PRICING_TIERS — keep in sync
-// if tiers ever change there. Expressed in USD cents so centsToRaw can
+// if tiers ever change there. Plans are immutable on-chain, so a re-price
+// means running this script again (it appends 5 NEW plans) and then
+// deactivating the old ones with scripts/deactivate-plans-safe.js —
+// existing subscribers stay on their old plan, at their old price. Expressed in USD cents so centsToRaw can
 // convert precisely for any token's decimals without floating-point error.
+//
+// Billing policy baked into every plan (SubscriptionManager v2):
+//   leadDays  - the renewal charge window opens this many days BEFORE the paid
+//               period ends; the keeper makes one attempt per day inside it
+//               (day -2, -1, 0 => 3 attempts).
+//   graceDays - 0: if the last attempt (at the period end) still fails, the
+//               subscription is cancelled (Expired) right away.
+// Same for monthly and yearly, e.g. bought 25 Sep 2026 -> attempts 23, 24, 25
+// Oct 2026 (monthly) / 23, 24, 25 Sep 2027 (yearly).
+const LEAD_DAYS = 2;
+const GRACE_DAYS = 0;
 const TIER_PLANS = [
-  { label: "Starter (monthly)", cents: 1000, days: 30, graceDays: 5 },
-  { label: "Basic (monthly)", cents: 2900, days: 30, graceDays: 5 },
-  { label: "Basic (yearly)", cents: 27840, days: 365, graceDays: 10 },
-  { label: "Advance (monthly)", cents: 6900, days: 30, graceDays: 5 },
-  { label: "Advance (yearly)", cents: 66240, days: 365, graceDays: 10 },
+  { label: "Starter (monthly)", cents: 1500, days: 30 },
+  { label: "Basic (monthly)", cents: 3900, days: 30 },
+  { label: "Basic (yearly)", cents: 37440, days: 365 },
+  { label: "Advance (monthly)", cents: 7900, days: 30 },
+  { label: "Advance (yearly)", cents: 75840, days: 365 },
 ];
 
 function centsToRaw(cents, decimals) {
@@ -67,7 +83,17 @@ async function main() {
     throw new Error(`No contract found at ${managerAddress} on ${hre.network.name} — check MANAGER_ADDRESS.`);
   }
 
+  // Plans on a v1 manager can't carry a leadTime, and a 4-argument createPlan
+  // call against it would just revert after burning gas through the Safe. The
+  // v2 selector is present in v2 bytecode only — refuse early instead.
   const manager = await hre.ethers.getContractAt("SubscriptionManager", managerAddress);
+  const v2Selector = manager.interface.getFunction("createPlan").selector.slice(2);
+  if (!managerCode.toLowerCase().includes(v2Selector)) {
+    throw new Error(
+      `${managerAddress} on ${hre.network.name} has no createPlan(price,interval,grace,leadTime) — it looks like a ` +
+        `v1 manager. This script only creates plans on a v2 manager (deploy one first, see scripts/deploy.js).`,
+    );
+  }
   const tokenAddress = await manager.paymentToken();
   // Fetched live rather than passed as a param — a wrong manually-typed
   // decimals value would silently create plans priced off by orders of
@@ -98,13 +124,18 @@ async function main() {
   const transactions = TIER_PLANS.map((tier) => ({
     to: managerAddress,
     value: "0",
-    data: manager.interface.encodeFunctionData("createPlan", [toRaw(tier.cents), tier.days * DAY, tier.graceDays * DAY]),
+    data: manager.interface.encodeFunctionData("createPlan", [
+      toRaw(tier.cents),
+      tier.days * DAY,
+      GRACE_DAYS * DAY,
+      LEAD_DAYS * DAY,
+    ]),
   }));
 
   console.log(`\nAbout to batch ${transactions.length} createPlan() calls through Safe ${safeAddress}:`);
   for (const tier of TIER_PLANS) {
     const amount = hre.ethers.formatUnits(toRaw(tier.cents), decimals);
-    console.log(`  ${tier.label}: $${(tier.cents / 100).toFixed(2)} => ${amount} tokens / ${tier.days}d, ${tier.graceDays}d grace`);
+    console.log(`  ${tier.label}: $${(tier.cents / 100).toFixed(2)} => ${amount} tokens / ${tier.days}d, charge window opens ${LEAD_DAYS}d early, ${GRACE_DAYS}d grace`);
   }
 
   const protocolKit = await Safe.init({ provider: rpcUrl, signer: privateKey, safeAddress });
@@ -117,6 +148,11 @@ async function main() {
         `signature already meets the threshold and can execute immediately. Propose this transaction ` +
         `via the Safe UI or @safe-global/api-kit instead for a higher-threshold Safe.`,
     );
+  }
+
+  if (process.env.DRY_RUN === "1") {
+    console.log("\nDRY_RUN=1 — nothing signed or sent. Re-run without DRY_RUN to execute.");
+    return;
   }
 
   const safeTx = await protocolKit.createTransaction({ transactions });
@@ -133,7 +169,7 @@ async function main() {
     const p = await manager.plans(i);
     console.log(
       `  Plan #${i}: ${hre.ethers.formatUnits(p.price, decimals)} tokens / ${Number(p.interval) / DAY}d, ` +
-        `${Number(p.gracePeriod) / DAY}d grace, active=${p.active}`,
+        `${Number(p.gracePeriod) / DAY}d grace, lead ${Number(p.leadTime) / DAY}d, active=${p.active}`,
     );
   }
 }

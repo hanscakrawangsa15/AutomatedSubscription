@@ -57,7 +57,7 @@ async function main() {
       `(1h), ${GRACE_SECONDS}s grace (30m)`,
   );
 
-  const data = manager.interface.encodeFunctionData("createPlan", [priceRaw, INTERVAL_SECONDS, GRACE_SECONDS]);
+  const data = manager.interface.encodeFunctionData("createPlan", [priceRaw, INTERVAL_SECONDS, GRACE_SECONDS, 0]);
 
   const protocolKit = await Safe.init({ provider: rpcUrl, signer: privateKey, safeAddress });
   const [owners, threshold] = await Promise.all([protocolKit.getOwners(), protocolKit.getThreshold()]);

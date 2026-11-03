@@ -1,29 +1,37 @@
 import { useEffect, useState } from "react";
 import { useAppKitNetwork } from "@reown/appkit/react";
 import type { AppKitNetwork } from "@reown/appkit/networks";
-import { ETH_MAINNET, BSC_MAINNET } from "../lib/chains";
+import { ETH_MAINNET, BSC_MAINNET, PAYMENT_SUFFIX } from "../lib/chains";
 import { getReadProvider } from "../lib/readProvider";
 import { fetchPlans, type PlanInfo } from "../lib/plans";
-import { PRICING_TIERS, TEST_TIER, findOnChainPlan, type BillingCycle, type PricingTier } from "../lib/pricingTiers";
+import {
+  PRICING_TIERS,
+  TEST_TIER,
+  findOnChainPlan,
+  type BillingCycle,
+  type CampaignId,
+  type PricingTier,
+} from "../lib/pricingTiers";
 
 // Both networks pay in USDT — Ethereum's USDT manager uses the "_USDT"
 // suffix (USDC is Ethereum's primary/unsuffixed token), while BNB Chain's
 // USDT manager IS the primary/unsuffixed one (suffix "") — see
 // docs/mainnet-addresses.md.
 const NETWORKS: { chain: AppKitNetwork; suffix: string; label: string; standard: string }[] = [
-  { chain: ETH_MAINNET, suffix: "_USDT", label: "Ethereum", standard: "ERC-20" },
-  { chain: BSC_MAINNET, suffix: "", label: "BNB Chain", standard: "BEP-20" },
+  { chain: ETH_MAINNET, suffix: PAYMENT_SUFFIX[1], label: "Ethereum", standard: "ERC-20" },
+  { chain: BSC_MAINNET, suffix: PAYMENT_SUFFIX[56], label: "BNB Chain", standard: "BEP-20" },
 ];
 
 type PaymentNetworkStepProps = {
   tierId: PricingTier["id"];
   cycle: BillingCycle;
+  campaign?: CampaignId | null;
   chainId: bigint | null;
   onResolved: (plan: PlanInfo) => void;
   onBack: () => void;
 };
 
-export function PaymentNetworkStep({ tierId, cycle, chainId, onResolved, onBack }: PaymentNetworkStepProps) {
+export function PaymentNetworkStep({ tierId, cycle, campaign = null, chainId, onResolved, onBack }: PaymentNetworkStepProps) {
   const { switchNetwork } = useAppKitNetwork();
   // The chainId the user picked and is waiting to land on — cleared once
   // resolution finishes (success or failure). Distinct from the wallet's
@@ -49,11 +57,11 @@ export function PaymentNetworkStep({ tierId, cycle, chainId, onResolved, onBack 
 
     setResolving(true);
     let cancelled = false;
-    fetchPlans(provider, pendingChainId, target.suffix)
+    fetchPlans(provider, pendingChainId, target.suffix, campaign !== null)
       .then((plans) => {
         if (cancelled) return;
         const tier = [...PRICING_TIERS, TEST_TIER].find((t) => t.id === tierId);
-        const match = tier ? findOnChainPlan(plans, tier, cycle) : undefined;
+        const match = tier ? findOnChainPlan(plans, tier, cycle, campaign) : undefined;
         if (match) {
           onResolved(match);
         } else {
@@ -72,7 +80,7 @@ export function PaymentNetworkStep({ tierId, cycle, chainId, onResolved, onBack 
     return () => {
       cancelled = true;
     };
-  }, [pendingChainId, chainId, tierId, cycle, onResolved]);
+  }, [pendingChainId, chainId, tierId, cycle, campaign, onResolved]);
 
   const handlePick = async (network: (typeof NETWORKS)[number]) => {
     setError(null);

@@ -6,6 +6,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const mysql = require("mysql2/promise");
 const { sendEmail } = require("../scripts/emailClient");
+const { verifySubscriptionTx, VerificationError } = require("./verifyTx");
 
 const PORT = process.env.NOTIFY_PORT || 4000;
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
@@ -38,14 +39,13 @@ const SOLANA_ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 // never user input from a URL — validated anyway since it's still request body.
 const CHAIN_NAME_RE = /^[a-z0-9-]{1,50}$/;
 
-// Mirrors the contract's Status enum (Inactive/Active/Overdue/Expired),
-// lowercased for admin-panel readability — see SubscriptionManager.sol.
-const SUBSCRIPTION_STATUSES = ["active", "overdue", "expired", "inactive"];
-// Whether the most recent renewal *attempt* actually moved funds
-// (chargeDue/retryCharge can succeed as a transaction while still failing
-// to charge — see chargeDue's insufficient-allowance/balance branch, which
-// marks Overdue instead of reverting).
-const RENEWAL_RESULTS = ["success", "failed"];
+// Must match frontend/src/lib/chains.ts's chain_name slugs and keeper.js's
+// CHAIN_NAMES — the subscribers table is keyed by this slug.
+const CHAIN_NAMES = { 8453: "base-mainnet", 1: "ethereum-mainnet", 56: "bnb-mainnet" };
+
+function chainNameFor(chainId) {
+  return CHAIN_NAMES[chainId] || `evm-${chainId}`;
+}
 
 // Returns the canonical storage key for a wallet address, or null if the
 // address matches no known chain's format. EVM addresses are
@@ -69,72 +69,164 @@ const allowedOrigins = (process.env.ADMIN_PANEL_ORIGIN || "http://localhost:5173
   .map((o) => o.trim())
   .filter(Boolean);
 app.use(cors({ origin: allowedOrigins, credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: "20kb" }));
 app.use(cookieParser());
+
+// Minimal in-memory fixed-window rate limiter (per client IP). Good enough for
+// a single-process server; behind a proxy, set TRUST_PROXY=1 so req.ip is the
+// real client rather than the proxy. Swap for express-rate-limit + a shared
+// store if this is ever run as multiple instances.
+if (process.env.TRUST_PROXY) app.set("trust proxy", Number(process.env.TRUST_PROXY) || 1);
+
+function rateLimit({ windowMs, max, keyOf = (req) => req.ip }) {
+  const hits = new Map();
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of hits) if (entry.resetAt <= now) hits.delete(key);
+  }, windowMs).unref();
+  // Counts one hit for `key`; returns 0 if allowed, else seconds until the
+  // window resets.
+  const consume = (key) => {
+    const now = Date.now();
+    const entry = hits.get(key);
+    if (!entry || entry.resetAt <= now) {
+      hits.set(key, { count: 1, resetAt: now + windowMs });
+      return 0;
+    }
+    if (++entry.count > max) return Math.ceil((entry.resetAt - now) / 1000);
+    return 0;
+  };
+  const middleware = (req, res, next) => {
+    const retryAfter = consume(keyOf(req));
+    if (!retryAfter) return next();
+    res.set("Retry-After", String(retryAfter));
+    return res.status(429).json({ error: "too many requests — try again later" });
+  };
+  middleware.consume = consume;
+  return middleware;
+}
+
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
+
+// Every accepted POST /api/subscribers costs paid RPC calls (receipt + state
+// read + block), so it's capped hard: by default a client may make at most 3
+// per 10 minutes, counted both per IP and per wallet address (rotating IPs
+// doesn't get around the wallet cap, and one shared office/VPN IP doesn't
+// starve other wallets of theirs). A real user needs ~1 call per action
+// (subscribe / cancel / payNow). Tune via NOTIFY_RPC_MAX_REQUESTS and
+// NOTIFY_RPC_WINDOW_MINUTES.
+const RPC_MAX_REQUESTS = Number(process.env.NOTIFY_RPC_MAX_REQUESTS) || 3;
+const RPC_WINDOW_MS = (Number(process.env.NOTIFY_RPC_WINDOW_MINUTES) || 10) * 60 * 1000;
+const subscribeLimiter = rateLimit({ windowMs: RPC_WINDOW_MS, max: RPC_MAX_REQUESTS });
+const subscribeWalletLimiter = rateLimit({ windowMs: RPC_WINDOW_MS, max: RPC_MAX_REQUESTS });
 
 // Best-effort confirmation email sent right after a subscribe() transaction
 // confirms — mirrors keeper.js's renewal-receipt email but fires
 // immediately instead of waiting for the keeper's next poll tick. Never
 // awaited by the caller: a slow/failed Resend call must not delay or break
 // the subscriber upsert response.
+// These fields come straight from the request body, so they're escaped before
+// being interpolated into the HTML (and capped in length) — otherwise anyone
+// could inject markup/links into an email sent from our own sender domain.
+function escapeHtml(value) {
+  return String(value)
+    .slice(0, 200)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 async function sendConfirmationEmail({ to, planLabel, amountLabel, intervalLabel, txHash }) {
+  const plan = escapeHtml(planLabel || "subscription");
+  const amount = amountLabel ? escapeHtml(amountLabel) : "";
+  const interval = intervalLabel ? escapeHtml(intervalLabel) : "";
+  const tx = txHash ? escapeHtml(txHash) : "";
   await sendEmail({
     to,
-    subject: `Subscription confirmed${amountLabel ? ` — ${amountLabel} charged` : ""}`,
-    html: `<p>Your <strong>${planLabel || "subscription"}</strong> is now active.</p>
-${amountLabel ? `<p><strong>Amount charged:</strong> ${amountLabel}</p>` : ""}
-${intervalLabel ? `<p><strong>Billing interval:</strong> ${intervalLabel}</p>` : ""}
-${txHash ? `<p><strong>Transaction:</strong> ${txHash}</p>` : ""}
+    subject: `Subscription confirmed${amount ? ` — ${amount} charged` : ""}`,
+    html: `<p>Your <strong>${plan}</strong> is now active.</p>
+${amount ? `<p><strong>Amount charged:</strong> ${amount}</p>` : ""}
+${interval ? `<p><strong>Billing interval:</strong> ${interval}</p>` : ""}
+${tx ? `<p><strong>Transaction:</strong> ${tx}</p>` : ""}
 <p>You'll get another email each time this subscription renews.</p>`,
   });
 }
 
-app.post("/api/subscribers", async (req, res) => {
-  const {
-    address,
-    chainName,
-    chainId,
-    email,
-    trafficSource,
-    planId,
-    planLabel,
-    txHash,
-    amountLabel,
-    intervalLabel,
-    periodsPaid,
-    nextChargeAt,
-    activatedAt,
-    status,
-    renewalResult,
-  } = req.body || {};
+// A confirmation email / email change is only honoured for a transaction this
+// recent. Anyone can read a past txHash off the chain, so without a window
+// they could replay a victim's old subscribe tx with their own email.
+const FRESH_TX_SECONDS = 10 * 60;
+const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
 
-  const walletAddress = normalizeAddress(address);
+app.post("/api/subscribers", subscribeLimiter, async (req, res) => {
+  // Only identity + free-form display fields come from the body. Status,
+  // plan, periods and schedule are read from the chain (see verifyTx.js), so
+  // nobody can write arbitrary subscription data for a wallet.
+  const { address, chainId, txHash, email, trafficSource, planLabel, amountLabel, intervalLabel } = req.body || {};
+
+  const walletAddress = typeof address === "string" && EVM_ADDRESS_RE.test(address) ? address.toLowerCase() : null;
   if (!walletAddress) {
     return res.status(400).json({ error: "invalid address" });
   }
-  if (typeof chainName !== "string" || !CHAIN_NAME_RE.test(chainName)) {
-    return res.status(400).json({ error: "invalid chainName" });
+  if (!Number.isInteger(chainId) || chainId <= 0) {
+    return res.status(400).json({ error: "invalid chainId" });
+  }
+  if (typeof txHash !== "string" || !TX_HASH_RE.test(txHash)) {
+    return res.status(400).json({ error: "invalid txHash" });
   }
   if (email !== undefined && email !== null && email !== "" && (typeof email !== "string" || !EMAIL_RE.test(email))) {
     return res.status(400).json({ error: "invalid email" });
   }
-  if (periodsPaid !== undefined && periodsPaid !== null && !Number.isInteger(periodsPaid)) {
-    return res.status(400).json({ error: "invalid periodsPaid" });
-  }
-  if (nextChargeAt !== undefined && nextChargeAt !== null && !Number.isInteger(nextChargeAt)) {
-    return res.status(400).json({ error: "invalid nextChargeAt" });
-  }
-  if (activatedAt !== undefined && activatedAt !== null && !Number.isInteger(activatedAt)) {
-    return res.status(400).json({ error: "invalid activatedAt" });
-  }
-  if (status !== undefined && status !== null && !SUBSCRIPTION_STATUSES.includes(status)) {
-    return res.status(400).json({ error: "invalid status" });
-  }
-  if (renewalResult !== undefined && renewalResult !== null && !RENEWAL_RESULTS.includes(renewalResult)) {
-    return res.status(400).json({ error: "invalid renewalResult" });
+  for (const [name, value] of Object.entries({ trafficSource, planLabel, amountLabel, intervalLabel })) {
+    if (value !== undefined && value !== null && (typeof value !== "string" || value.length > 200)) {
+      return res.status(400).json({ error: `invalid ${name}` });
+    }
   }
 
+  const walletRetryAfter = subscribeWalletLimiter.consume(walletAddress);
+  if (walletRetryAfter) {
+    res.set("Retry-After", String(walletRetryAfter));
+    return res.status(429).json({ error: "too many requests for this wallet — try again later" });
+  }
+
+  const chainName = chainNameFor(chainId);
+
+  let existing;
   try {
+    const [existingRows] = await pool.query(
+      "SELECT email, tx_hash FROM subscribers WHERE wallet_address = ? AND chain_name = ? LIMIT 1",
+      [walletAddress, chainName],
+    );
+    existing = existingRows[0];
+  } catch (err) {
+    console.error("Failed to look up subscriber:", err.message);
+    return res.status(500).json({ error: "database error" });
+  }
+  // This exact tx is already recorded — nothing new to learn from the chain,
+  // so skip the RPC calls entirely (a retried/duplicated report costs nothing).
+  if (existing?.tx_hash === txHash) {
+    return res.json({ ok: true, alreadyRecorded: true });
+  }
+
+  let chain;
+  try {
+    chain = await verifySubscriptionTx({ chainId, txHash, address });
+  } catch (err) {
+    if (err instanceof VerificationError) return res.status(err.httpStatus).json({ error: err.message });
+    console.error("Transaction verification failed:", err.message);
+    return res.status(502).json({ error: "could not verify transaction" });
+  }
+
+  const fresh = Math.floor(Date.now() / 1000) - chain.blockTimestamp <= FRESH_TX_SECONDS;
+
+  try {
+    // An existing email is only replaced by a fresh subscribe tx; otherwise
+    // the stored one is kept (null => COALESCE keeps the column as-is).
+    const canSetEmail = email && (!existing?.email || (fresh && chain.subscribed));
+    const emailToStore = canSetEmail ? email : null;
+
     await pool.query(
       `INSERT INTO subscribers
          (wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, activated_at, status, last_renewal_result)
@@ -144,44 +236,41 @@ app.post("/api/subscribers", async (req, res) => {
          email = COALESCE(NULLIF(VALUES(email), ''), email),
          traffic_source = COALESCE(NULLIF(VALUES(traffic_source), ''), traffic_source),
          plan_id = VALUES(plan_id),
-         plan_label = VALUES(plan_label),
+         plan_label = COALESCE(VALUES(plan_label), plan_label),
          tx_hash = VALUES(tx_hash),
-         periods_paid = COALESCE(?, periods_paid),
-         next_charge_at = COALESCE(FROM_UNIXTIME(?), next_charge_at),
-         activated_at = COALESCE(FROM_UNIXTIME(?), activated_at),
-         status = COALESCE(?, status),
-         last_renewal_result = COALESCE(?, last_renewal_result)`,
+         periods_paid = VALUES(periods_paid),
+         next_charge_at = VALUES(next_charge_at),
+         activated_at = COALESCE(VALUES(activated_at), activated_at),
+         status = VALUES(status),
+         last_renewal_result = COALESCE(VALUES(last_renewal_result), last_renewal_result)`,
       [
         walletAddress,
         chainName,
-        chainId ?? null,
-        email || null,
+        chainId,
+        emailToStore,
         trafficSource || null,
-        planId ?? null,
+        chain.planId,
         planLabel ?? null,
-        txHash ?? null,
-        periodsPaid ?? 1,
-        nextChargeAt ?? null,
-        activatedAt ?? null,
-        status ?? "active",
-        renewalResult ?? "success",
-        periodsPaid ?? null,
-        nextChargeAt ?? null,
-        activatedAt ?? null,
-        status ?? null,
-        renewalResult ?? null,
+        txHash,
+        chain.periodsPaid,
+        chain.nextChargeAt,
+        chain.activatedAt,
+        chain.status,
+        chain.charged || !existing ? "success" : null,
       ],
     );
-    console.log(`Upserted subscriber ${walletAddress} on ${chainName} (plan ${planId ?? "?"}, tx ${txHash ?? "-"})`);
+    console.log(`Upserted subscriber ${walletAddress} on ${chainName} (plan ${chain.planId}, tx ${txHash})`);
     res.json({ ok: true });
 
-    if (email) {
+    // Only for a fresh subscribe; a replay of an already-recorded tx returned
+    // early above, so it can't re-trigger the email.
+    if (emailToStore && fresh && chain.subscribed) {
       sendConfirmationEmail({
-        to: email,
-        planLabel: typeof planLabel === "string" ? planLabel : undefined,
-        amountLabel: typeof amountLabel === "string" ? amountLabel : undefined,
-        intervalLabel: typeof intervalLabel === "string" ? intervalLabel : undefined,
-        txHash: typeof txHash === "string" ? txHash : undefined,
+        to: emailToStore,
+        planLabel: planLabel ?? undefined,
+        amountLabel: amountLabel ?? undefined,
+        intervalLabel: intervalLabel ?? undefined,
+        txHash,
       }).catch((err) => console.error("Confirmation email failed:", err.message));
     }
   } catch (err) {
@@ -221,7 +310,10 @@ app.get("/api/subscribers/by-wallet/:address", async (req, res) => {
   }
 });
 
-app.get("/api/subscribers/:chainName/:address", async (req, res) => {
+// Returns a subscriber's email, so it's admin-only: left public it would let
+// anyone map any wallet address to its owner's email. Neither the frontend
+// nor the keeper calls this (the keeper reads the DB directly).
+app.get("/api/subscribers/:chainName/:address", requireAdmin, async (req, res) => {
   const walletAddress = normalizeAddress(req.params.address);
   const { chainName } = req.params;
   if (!walletAddress || !CHAIN_NAME_RE.test(chainName)) {
@@ -265,7 +357,7 @@ function requireAdmin(req, res, next) {
   }
 }
 
-app.post("/api/admin/login", async (req, res) => {
+app.post("/api/admin/login", loginLimiter, async (req, res) => {
   if (!requireAdminEnv(res)) return;
   const { username, password } = req.body || {};
   if (typeof username !== "string" || typeof password !== "string") {

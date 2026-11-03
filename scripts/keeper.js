@@ -3,7 +3,19 @@ const hre = require("hardhat");
 const { lookupSubscriberEmail, updateRenewalInfo, reconcileMissingSubscriber } = require("./subscribersDb");
 const { sendEmail } = require("./emailClient");
 
-const POLL_INTERVAL_MS = Number(process.env.KEEPER_POLL_MS || 10_000);
+// Billing is day-granular and every poll costs paid RPC calls, so the default
+// is a relaxed 60s. Local dev with minute-scale test plans can lower it via
+// KEEPER_POLL_MS / KEEPER_DISCOVER_MS.
+const POLL_INTERVAL_MS = Number(process.env.KEEPER_POLL_MS || 60_000);
+// How often to scan the chain for NEW subscribers (getLogs is the priciest
+// call here). A new subscriber's first charge is at least one plan interval
+// away, so there's no need to find them within seconds.
+const DISCOVER_INTERVAL_MS = Number(process.env.KEEPER_DISCOVER_MS || 10 * 60_000);
+
+const DAY = 86_400;
+// Charge policy: for each due date D (Subscription.nextChargeAt) the keeper
+// makes at most this many attempts — one per day, at D, D+1 day, D+2 days.
+const MAX_CHARGE_ATTEMPTS = Number(process.env.KEEPER_MAX_ATTEMPTS || 3);
 
 // Fallback for the local dev chain so `npm run keeper` keeps working without
 // any .env changes; every other network must be configured explicitly via
@@ -22,6 +34,25 @@ const LOCAL_CHAIN_DEFAULTS = {
 const ERC20_METADATA_ABI = [
   "function decimals() view returns (uint8)",
   "function symbol() view returns (string)",
+  "function balanceOf(address) view returns (uint256)",
+  "function allowance(address,address) view returns (uint256)",
+];
+
+// Explicit ABI instead of the compiled artifact, on purpose: the v2 contract
+// added a trailing `leadTime` field to Plan, and decoding a v1 manager's
+// 4-field plans() result with the 5-field artifact ABI throws. Reading only
+// the first four fields works against BOTH versions, and a v1 manager can
+// still have live subscribers that need renewing.
+const MANAGER_ABI = [
+  "function plans(uint256) view returns (uint256 price, uint256 interval, uint256 gracePeriod, bool active)",
+  "function subscriptions(address) view returns (uint256 planId, uint8 status, uint256 nextChargeAt, uint256 overdueSince, uint256 periodsPaid)",
+  // v2 promo pricing: the price of the user's NEXT payment (differs from
+  // plans(sub.planId).price once a promo runs out). Missing on a v1 manager.
+  "function nextCharge(address user) view returns (uint256 planId, uint256 price)",
+  "function chargeDue(address user)",
+  "function expireOverdue(address user)",
+  "event Subscribed(address indexed user, uint256 indexed planId, uint256 nextChargeAt)",
+  "event Reactivated(address indexed user, uint256 nextChargeAt)",
 ];
 
 // A chain can have more than one SubscriptionManager instance now (one per
@@ -135,7 +166,7 @@ async function main() {
   }
 
   const [keeper] = await hre.ethers.getSigners();
-  const manager = await hre.ethers.getContractAt("SubscriptionManager", managerAddress, keeper);
+  const manager = new hre.ethers.Contract(managerAddress, MANAGER_ABI, keeper);
   const usdc = new hre.ethers.Contract(usdcAddress, ERC20_METADATA_ABI, keeper);
   const [decimals, tokenSymbol] = await Promise.all([usdc.decimals(), usdc.symbol()]);
 
@@ -145,6 +176,38 @@ async function main() {
   console.log(`Watching ${managerAddress}, polling every ${POLL_INTERVAL_MS / 1000}s. Ctrl+C to stop.\n`);
 
   const knownUsers = new Set();
+  // Per-user schedule cache: lets the keeper skip every RPC call for a user
+  // until their next due time instead of re-reading them on every poll.
+  //   wakeAt   - unix seconds before which nothing needs doing for this user
+  //   dueKey   - the nextChargeAt the attempt counter below belongs to
+  //   lastSlot - highest attempt day (0-based) already handled for dueKey
+  const tracked = new Map();
+  const planCache = new Map();
+  const getPlan = async (planId) => {
+    const key = String(planId);
+    // price / interval / gracePeriod are immutable once a plan is created.
+    if (!planCache.has(key)) planCache.set(key, await manager.plans(planId));
+    return planCache.get(key);
+  };
+  // Price the contract will actually pull on the next chargeDue(): a promo
+  // plan switches to its normal-price successor after its discounted periods,
+  // and the funds check below must be against THAT price. A v1 manager has no
+  // nextCharge(), so it falls back to the plan's own price (and remembers).
+  let hasNextCharge = true;
+  const upcomingPrice = async (user, plan) => {
+    if (hasNextCharge) {
+      try {
+        return (await manager.nextCharge(user)).price;
+      } catch (err) {
+        // Only a missing function means "v1 manager"; a flaky RPC must not
+        // permanently downgrade this process to the wrong price.
+        if (err.code !== "CALL_EXCEPTION" && err.code !== "BAD_DATA") throw err;
+        hasNextCharge = false;
+      }
+    }
+    return plan.price;
+  };
+  const chainNow = async () => Number((await hre.ethers.provider.getBlock("latest")).timestamp);
   let lastScannedBlock = null;
   const chainName = chainNameFor(chainId);
   // Mirrors the contract's Status enum — see server/index.js's
@@ -159,6 +222,9 @@ async function main() {
     const events = [...subscribed, ...reactivated];
     for (const ev of events) {
       knownUsers.add(ev.args.user);
+      // A new Subscribed/Reactivated event means any cached schedule for this
+      // user is stale (e.g. cancelled and re-subscribed) — force a re-read.
+      tracked.delete(ev.args.user);
     }
     // Self-healing: reconciles any wallet this on-chain event proves
     // subscribed, but whose DB row somehow never showed up (see
@@ -194,7 +260,9 @@ async function main() {
     }
   };
 
+  let lastDiscoverAt = 0;
   const initialScan = async () => {
+    lastDiscoverAt = Date.now();
     const latest = await hre.ethers.provider.getBlockNumber();
     console.log(`Scanning for subscribers from block ${deployBlock} to ${latest}...`);
     await scanForUsers(deployBlock, latest);
@@ -203,6 +271,8 @@ async function main() {
   };
 
   const discoverUsers = async () => {
+    if (Date.now() - lastDiscoverAt < DISCOVER_INTERVAL_MS) return;
+    lastDiscoverAt = Date.now();
     const latest = await hre.ethers.provider.getBlockNumber();
     if (latest <= lastScannedBlock) return;
     await scanForUsers(lastScannedBlock + 1, latest);
@@ -248,61 +318,145 @@ async function main() {
     });
   };
 
+  // Moves an Overdue user to Expired once their grace period is over (the
+  // contract's version of "cancel the subscription"). With a 0-day grace plan
+  // this happens in the same tick as the final failed attempt.
+  const expireIfGraceOver = async (user, sub, now, entry) => {
+    const plan = await getPlan(sub.planId);
+    const expireAt = Number(sub.overdueSince) + Number(plan.gracePeriod);
+    if (now < expireAt) {
+      entry.wakeAt = expireAt;
+      return;
+    }
+    const tx = await manager.expireOverdue(user);
+    await tx.wait();
+    console.log(`[${new Date().toLocaleTimeString()}] expireOverdue(${user}) OK — subscription cancelled`);
+    await syncRenewalInfo(user, await manager.subscriptions(user), "failed");
+    tracked.delete(user);
+    knownUsers.delete(user);
+  };
+
+  // Renewal policy, per due date D = nextChargeAt:
+  //   - attempt k (k = 1..MAX_CHARGE_ATTEMPTS) happens on day D + (k-1) days;
+  //   - each attempt first reads the user's allowance + balance itself. If
+  //     both cover the price, chargeDue() runs immediately; if not, nothing is
+  //     sent on-chain (the contract would mark the user Overdue on the very
+  //     first failure) and the keeper just tries again the next day;
+  //   - on the last attempt an unfunded user is passed to chargeDue() anyway
+  //     so the contract flips them to Overdue, and the subscription is then
+  //     expired (immediately for a 0-day grace plan, else once grace ends).
+  // Time comes from the chain (block.timestamp), the same clock the contract
+  // uses to decide whether a charge is due.
+  const processUser = async (user, now) => {
+    let entry = tracked.get(user);
+    if (!entry) {
+      entry = { wakeAt: 0, dueKey: null, lastSlot: -1 };
+      tracked.set(user, entry);
+    }
+    if (entry.wakeAt > now) return;
+
+    const sub = await manager.subscriptions(user);
+    const status = Number(sub.status);
+    if (status !== 1 && status !== 2) {
+      // Inactive / Expired — nothing to charge until a new Subscribed event.
+      tracked.delete(user);
+      knownUsers.delete(user);
+      return;
+    }
+    if (status === 2) return expireIfGraceOver(user, sub, now, entry);
+
+    const due = Number(sub.nextChargeAt);
+    if (due !== entry.dueKey) {
+      entry.dueKey = due;
+      entry.lastSlot = -1;
+    }
+    if (now < due) {
+      entry.wakeAt = due;
+      return;
+    }
+
+    const slot = Math.floor((now - due) / DAY);
+    if (slot <= entry.lastSlot) {
+      entry.wakeAt = due + (entry.lastSlot + 1) * DAY;
+      return;
+    }
+
+    const plan = await getPlan(sub.planId);
+    const isFinal = slot >= MAX_CHARGE_ATTEMPTS - 1;
+    const attemptNo = Math.min(slot + 1, MAX_CHARGE_ATTEMPTS);
+    const time = new Date().toLocaleTimeString();
+    const [allowance, balance, price] = await Promise.all([
+      usdc.allowance(user, managerAddress),
+      usdc.balanceOf(user),
+      upcomingPrice(user, plan),
+    ]);
+    const funded = allowance >= price && balance >= price;
+    entry.lastSlot = slot;
+    entry.wakeAt = due + (slot + 1) * DAY;
+
+    if (!funded && !isFinal) {
+      const reason = allowance < price ? "allowance" : "balance";
+      console.log(`[${time}] ${user}: attempt ${attemptNo}/${MAX_CHARGE_ATTEMPTS} skipped — insufficient ${reason}, retrying tomorrow`);
+      await syncRenewalInfo(user, sub, "failed");
+      return;
+    }
+
+    try {
+      const tx = await manager.chargeDue(user);
+      const receipt = await tx.wait();
+      const updated = await manager.subscriptions(user);
+      // Money moved iff periodsPaid went up. An Active status alone proves
+      // nothing: on v2 a failed charge inside the retry window leaves the
+      // user Active (the contract only emits ChargeFailed).
+      if (Number(updated.periodsPaid) > Number(sub.periodsPaid)) {
+        console.log(`[${time}] chargeDue(${user}) OK (attempt ${attemptNo}/${MAX_CHARGE_ATTEMPTS})`);
+        entry.wakeAt = Number(updated.nextChargeAt);
+        const activatedAtSeconds = Number((await receipt.getBlock()).timestamp);
+        await notifyIfRegistered(user, updated, tx.hash, "success", activatedAtSeconds);
+      } else if (Number(updated.status) === 2) {
+        console.log(`[${time}] ${user}: attempt ${attemptNo}/${MAX_CHARGE_ATTEMPTS} failed — marked Overdue`);
+        await syncRenewalInfo(user, updated, "failed");
+        await expireIfGraceOver(user, updated, await chainNow(), entry);
+      } else {
+        // Charge didn't go through but the contract kept the user Active
+        // (still inside the retry window) — counts as this day's attempt.
+        console.log(`[${time}] ${user}: attempt ${attemptNo}/${MAX_CHARGE_ATTEMPTS} failed on-chain, retrying tomorrow`);
+        await syncRenewalInfo(user, updated, "failed");
+      }
+    } catch (err) {
+      if (/not due yet/i.test(err.message)) {
+        // Our clock view was a block ahead of the contract's — not a real attempt.
+        entry.lastSlot = slot - 1;
+        entry.wakeAt = now + 1;
+        return;
+      }
+      console.error(`[${time}] charge attempt ${attemptNo}/${MAX_CHARGE_ATTEMPTS} errored for ${user}:`, err.message);
+    }
+  };
+
   const tick = async () => {
     await discoverUsers();
-
-    for (const user of knownUsers) {
-      const sub = await manager.subscriptions(user);
-      const status = Number(sub.status);
-      const time = new Date().toLocaleTimeString();
-
+    const now = await chainNow();
+    for (const user of [...knownUsers]) {
       try {
-        if (status === 1 && (await manager.isDue(user))) {
-          const tx = await manager.chargeDue(user);
-          const receipt = await tx.wait();
-          console.log(`[${time}] chargeDue(${user}) OK`);
-          const updated = await manager.subscriptions(user);
-          // chargeDue never reverts on insufficient allowance/balance — it
-          // silently marks Overdue instead (see the contract) — so a
-          // non-reverting tx here does NOT necessarily mean money moved.
-          // The resulting status is the only reliable signal.
-          const renewalResult = Number(updated.status) === 1 ? "success" : "failed";
-          const activatedAtSeconds = renewalResult === "success" ? Number((await receipt.getBlock()).timestamp) : undefined;
-          await notifyIfRegistered(user, updated, tx.hash, renewalResult, activatedAtSeconds);
-        } else if (status === 2) {
-          try {
-            const tx = await manager.retryCharge(user);
-            const receipt = await tx.wait();
-            console.log(`[${time}] retryCharge(${user}) OK`);
-            const updated = await manager.subscriptions(user);
-            const activatedAtSeconds = Number((await receipt.getBlock()).timestamp);
-            await notifyIfRegistered(user, updated, tx.hash, "success", activatedAtSeconds);
-          } catch {
-            // retryCharge reverts outright on failure (unlike chargeDue) —
-            // reaching here means still insufficient allowance/balance.
-            await syncRenewalInfo(user, sub, "failed");
-            const plan = await manager.plans(sub.planId);
-            const block = await hre.ethers.provider.getBlock("latest");
-            if (block.timestamp >= Number(sub.overdueSince) + Number(plan.gracePeriod)) {
-              const tx = await manager.expireOverdue(user);
-              await tx.wait();
-              console.log(`[${time}] expireOverdue(${user}) OK`);
-              const updated = await manager.subscriptions(user);
-              await syncRenewalInfo(user, updated, "failed");
-            }
-          }
-        }
+        await processUser(user, now);
       } catch (err) {
-        console.error(`[${time}] action failed for ${user}:`, err.message);
+        console.error(`[${new Date().toLocaleTimeString()}] action failed for ${user}:`, err.message);
       }
     }
   };
 
   await initialScan();
-  await tick();
-  setInterval(() => {
-    tick().catch((err) => console.error("Keeper tick failed:", err.message));
-  }, POLL_INTERVAL_MS);
+  // A sequential loop (not setInterval): a slow tick can never overlap the
+  // next one and collide on the keeper's nonce.
+  for (;;) {
+    try {
+      await tick();
+    } catch (err) {
+      console.error("Keeper tick failed:", err.message);
+    }
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+  }
 }
 
 main().catch((err) => {

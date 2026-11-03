@@ -17,7 +17,7 @@ REPORT_GAS=true npx hardhat test    # gas report
 
 ## Suite summary
 
-`test/SubscriptionManager.test.js` — 29 tests, all passing, organized by area:
+`test/SubscriptionManager.test.js` — 47 tests, all passing, organized by area:
 
 | Area | Tests | Covers |
 |---|---|---|
@@ -28,6 +28,8 @@ REPORT_GAS=true npx hardhat test    # gas report
 | pause / unpause | 2 | Paused state blocks `subscribe`/`chargeDue`/`retryCharge`/`payNow`; `cancel` deliberately still works while paused (users can always opt out, see the `@dev` note at the call site); double-pause/double-unpause revert with the expected OZ `Pausable` custom errors. |
 | rescueERC20 | 1 | Rescues an unrelated ERC20 sent to the contract by mistake; reverts if asked to rescue the payment token itself. |
 | reentrancy | 1 | A purpose-built malicious ERC20 (`ReentrantToken`, re-enters an arbitrary target from `transferFrom`) attempts to re-enter `subscribe()` mid-call; `nonReentrant` blocks it. |
+| renewal lead time (v2) | 7 | `createPlan` stores `leadTime` and rejects `leadTime >= interval`; `subscribe` schedules the first charge at `interval - leadTime`; charge succeeds the moment the window opens and the schedule stays fixed (`+interval`); an unfunded user stays `Active` through the whole window — even when a third party calls `chargeDue` — and only goes `Overdue` at the period end (boundary tested to the second), then can be expired immediately on a 0-day grace plan; a user who tops up between attempts is charged on the next attempt without the schedule slipping; `payNow` / `retryCharge` re-open the window at `interval - leadTime` after payment; `leadTime = 0` behaves exactly like v1. |
+| promo pricing (v2) | 11 | Partner discount: monthly promo bills 12 discounted payments (purchase + 11 renewals) then the normal price from payment 13 with the plan switching to the normal plan; yearly promo (1 payment) renews at the normal yearly price; the fixed schedule is unchanged across the switch; an unfunded user at the switch is judged against the NORMAL price (`ChargeFailed`, then charged once topped up); `payNow` / `retryCharge` bill and count correctly; the discount is once per wallet (cancel + re-buy the promo plan reverts `promo already used`, a partly used promo resumes), per-address not global; a deactivated promo plan blocks new sign-ups while existing subscribers still switch; `setPromo` is owner-only, set-once, and rejects invalid pairs (chains, schedule mismatch, cheaper successor, zero periods); a new campaign needs only `createPlan` + `setPromo`. |
 | view helpers | 1 | `hasActiveAccess` / `isDue` / `getSubscription` checked across all four `Status` values (Inactive, Active, Overdue, Expired). |
 
 ## Coverage
