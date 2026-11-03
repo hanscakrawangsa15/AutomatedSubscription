@@ -20,7 +20,7 @@ const RPC_ENV = {
   97: "BSC_TESTNET_RPC_URL",
 };
 
-const MANAGER_ENV_RE = /^SUBSCRIPTION_MANAGER_ADDRESS_(\d+)(?:_[A-Z0-9]+)?$/;
+const MANAGER_ENV_RE = /^SUBSCRIPTION_MANAGER_ADDRESS_(\d+)(?:_[A-Z0-9]+)*$/;
 
 const iface = new Interface([
   "event Subscribed(address indexed user, uint256 indexed planId, uint256 nextChargeAt)",

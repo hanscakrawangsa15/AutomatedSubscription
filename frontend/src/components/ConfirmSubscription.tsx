@@ -235,7 +235,12 @@ export function ConfirmSubscription({
               <strong>
                 Subscribe — charges {plan.price} {plan.tokenSymbol} now.
               </strong>{" "}
-              Only this amount actually leaves your wallet today. Future renewals pull {plan.price} {plan.tokenSymbol}{" "}
+              Only this amount actually leaves your wallet today.{" "}
+              {plan.promo && successorPrice
+                ? plan.promo.periods > 1
+                  ? `Your next ${plan.promo.periods - 1} renewals pull ${plan.price} ${plan.tokenSymbol}, then ${successorPrice} ${plan.tokenSymbol}`
+                  : `Your next renewal pulls the regular ${successorPrice} ${plan.tokenSymbol}`
+                : `Future renewals pull ${plan.price} ${plan.tokenSymbol}`}{" "}
               automatically from the approved cap, with no further wallet confirmation needed — until the cap runs
               out.
             </li>

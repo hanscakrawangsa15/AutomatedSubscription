@@ -783,6 +783,18 @@ describe("SubscriptionManager", () => {
       await expect(manager.connect(owner).setPromo(5, 6, 12)).to.be.revertedWith("successor cheaper");
     });
 
+    it("a plan that already has subscribers can never become a promo (no retroactive price change)", async () => {
+      const { manager, owner, user, decimals } = await loadFixture(promoFixture);
+      const u = (v) => ethers.parseUnits(v, decimals);
+      await manager.connect(owner).createPlan(u("12"), 30 * DAY, 0, 2 * DAY); // 5
+      await manager.connect(user).subscribe(5);
+      await manager.connect(user).cancel();
+      await expect(manager.connect(owner).setPromo(5, 1, 6)).to.be.revertedWith("plan already sold");
+      // an unsold plan is still fine
+      await manager.connect(owner).createPlan(u("12"), 30 * DAY, 0, 2 * DAY); // 6
+      await manager.connect(owner).setPromo(6, 1, 6);
+    });
+
     it("a future campaign needs only new plans + setPromo on the same contract", async () => {
       const { manager, owner, user, decimals } = await loadFixture(promoFixture);
       const u = (v) => ethers.parseUnits(v, decimals);

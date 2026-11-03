@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAppKitNetwork } from "@reown/appkit/react";
 import "./App.css";
-import { useAppKitWallet } from "./hooks/useAppKitWallet";
+import { useAppKitWallet, DEMO_ACCOUNT } from "./hooks/useAppKitWallet";
 import { WalletBar } from "./components/WalletBar";
 import { PricingTiers } from "./components/PricingTiers";
 import { ConnectWalletStep } from "./components/ConnectWalletStep";
@@ -176,6 +176,11 @@ function App({ campaign = null }: { campaign?: CampaignId | null }) {
 
   return (
     <>
+      {DEMO_ACCOUNT && (
+        <div className="banner banner--warning">
+          LOCAL DEMO MODE — transactions go to a local test node, not a real network.
+        </div>
+      )}
       <nav className="network-family-switch">
         <a className="back-link" href="https://xenorize.com/account?tab=subscription">
           &larr; Back to Dashboard

@@ -1,6 +1,8 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
+  /** LOCAL DEMO ONLY (dev server): address of an unlocked account on a local Hardhat node to act as the wallet. Ignored in production builds. */
+  readonly VITE_DEMO_ACCOUNT?: string;
   /** WalletConnect/Reown Cloud project ID — required for the wallet connect modal. Get one free at cloud.reown.com */
   readonly VITE_WALLETCONNECT_PROJECT_ID?: string;
   /** Optional: base URL of the local notification server (default http://localhost:4000) */

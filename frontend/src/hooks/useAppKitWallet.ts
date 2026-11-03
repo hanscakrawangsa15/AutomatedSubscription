@@ -1,7 +1,47 @@
 import { useEffect, useState } from "react";
-import { BrowserProvider, type Eip1193Provider, type JsonRpcSigner } from "ethers";
+import { BrowserProvider, JsonRpcProvider, type Eip1193Provider, type JsonRpcSigner } from "ethers";
 import { useAppKit, useAppKitAccount, useAppKitNetwork, useAppKitProvider, useDisconnect } from "@reown/appkit/react";
 import { appKit } from "../lib/appkit";
+
+// LOCAL DEMO MODE — never active in a production build. Only when the dev
+// server is started with VITE_DEMO_ACCOUNT=<address> does the "wallet" become
+// an unlocked account of a local Hardhat node (VITE_BSC_MAINNET_RPC_URL),
+// which signs by itself — no extension, no keys in the code. Vite replaces
+// import.meta.env.DEV with `false` in `vite build`, so this whole branch is
+// dead code there.
+export const DEMO_ACCOUNT: string | undefined = import.meta.env.DEV ? import.meta.env.VITE_DEMO_ACCOUNT : undefined;
+const DEMO_CHAIN_ID = 56n;
+
+function useDemoWallet() {
+  const [signer, setSigner] = useState<JsonRpcSigner | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const connect = async () => {
+    setConnecting(true);
+    setError(null);
+    try {
+      const rpc = new JsonRpcProvider(import.meta.env.VITE_BSC_MAINNET_RPC_URL, DEMO_CHAIN_ID, { staticNetwork: true });
+      setSigner(await rpc.getSigner(DEMO_ACCOUNT));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Demo node unreachable — is `hardhat node` running?");
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  return {
+    provider: null as BrowserProvider | null,
+    signer,
+    account: signer ? (DEMO_ACCOUNT ?? null) : null,
+    chainId: signer ? DEMO_CHAIN_ID : null,
+    connecting,
+    reconnecting: false,
+    error,
+    connect,
+    disconnect: async () => setSigner(null),
+  };
+}
 
 /**
  * Adapts Reown AppKit's hooks to the same shape the app's components already
@@ -9,7 +49,7 @@ import { appKit } from "../lib/appkit";
  * WalletConnect modal (all wallets: injected, mobile via QR, Coinbase, etc.)
  * can be dropped in without touching the checkout/confirm/manage screens.
  */
-export function useAppKitWallet() {
+function useRealWallet() {
   const { open } = useAppKit();
   const { address, isConnected, status } = useAppKitAccount();
   const { chainId: rawChainId } = useAppKitNetwork();
@@ -99,3 +139,7 @@ export function useAppKitWallet() {
     disconnect,
   };
 }
+
+// DEMO_ACCOUNT is a module-level constant, so the same hook is chosen on every
+// render and React's hook order stays stable.
+export const useAppKitWallet = DEMO_ACCOUNT ? useDemoWallet : useRealWallet;

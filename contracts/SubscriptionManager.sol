@@ -91,6 +91,10 @@ contract SubscriptionManager is Ownable, ReentrancyGuard, Pausable {
 
     mapping(uint256 => Promo) public promos;
     mapping(uint256 => bool) public isPromoSuccessor;
+    // Plan yang pernah dibeli lewat subscribe(). Plan seperti ini TIDAK boleh
+    // dijadikan plan promo lagi (setPromo): subscriber lama akan tiba-tiba
+    // mendapat jatah diskon lalu harganya naik sendiri ke plan penerus.
+    mapping(uint256 => bool) public planSold;
     // Jumlah pembayaran promo yang SUDAH dipakai per (alamat, plan promo).
     // Sengaja tidak pernah di-reset (bertahan lewat cancel -> subscribe ulang)
     // supaya diskon tidak bisa diperpanjang dengan cancel lalu beli lagi.
@@ -172,6 +176,7 @@ contract SubscriptionManager is Ownable, ReentrancyGuard, Pausable {
         require(promos[planId].periods == 0, "promo already set");
         require(promos[successorId].periods == 0, "successor is promo");
         require(!isPromoSuccessor[planId], "plan is a successor");
+        require(!planSold[planId], "plan already sold");
 
         Plan storage promo = plans[planId];
         Plan storage next = plans[successorId];
@@ -255,6 +260,7 @@ contract SubscriptionManager is Ownable, ReentrancyGuard, Pausable {
         // supaya harga yang tampil di UI = harga yang ditagih).
         Promo memory promo = promos[planId];
         require(promo.periods == 0 || promoPaid[msg.sender][planId] < promo.periods, "promo already used");
+        if (!planSold[planId]) planSold[planId] = true;
 
         // Tarik pembayaran periode pertama langsung (di transaksi yang sama)
         paymentToken.safeTransferFrom(msg.sender, treasury, plan.price);
