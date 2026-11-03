@@ -71,4 +71,4 @@ export function getChainSlug(chainId: number | bigint | null | undefined): strin
 // subscriptions (see lib/contracts.ts). One place to flip when a chain moves to
 // a newly deployed manager — e.g. BNB Chain "" -> "_V2" at the v2 cutover
 // (docs/bnb-v2-rollout.md). Old managers stay readable for existing subscribers.
-export const PAYMENT_SUFFIX: Record<number, string> = { 1: "_USDT_V2", 56: "" };
+export const PAYMENT_SUFFIX: Record<number, string> = { 1: "_USDT_V2", 56: "_V2" };
