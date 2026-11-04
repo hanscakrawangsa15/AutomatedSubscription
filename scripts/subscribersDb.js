@@ -37,7 +37,7 @@ function getPool() {
 // stored exactly as given, so callers must pass them through unchanged.
 async function lookupSubscriberEmail(walletAddress, chainName) {
   const [rows] = await getPool().query(
-    "SELECT email FROM subscribers WHERE wallet_address = ? AND chain_name = ? LIMIT 1",
+    "SELECT email FROM subscribers WHERE wallet_address = ? AND chain_name = ? AND email IS NOT NULL LIMIT 1",
     [walletAddress, chainName],
   );
   return rows[0]?.email || null;
@@ -52,11 +52,10 @@ async function lookupSubscriberEmail(walletAddress, chainName) {
 // already exist, written by server/index.js's /api/subscribers on the
 // initial subscribe.
 //
-// The table keeps ONE row per wallet+chain, but a chain can now have several
-// managers (v1 and v2). managerAddress stamps/guards the row: a row that
-// already belongs to a different manager is never overwritten by this
-// keeper, and a legacy row (manager_address NULL, written before v2) gets
-// stamped with this keeper's manager on its next update.
+// The table keeps one row per wallet+chain+MANAGER (v1 and v2 rows of the same
+// wallet coexist). managerAddress guards the row: this keeper only updates its
+// own manager's row, and a leftover NULL row (written by pre-migration code)
+// gets stamped with this keeper's manager on its next update.
 async function updateRenewalInfo(
   walletAddress,
   chainName,
@@ -75,8 +74,8 @@ async function updateRenewalInfo(
 }
 
 // Backfills a row straight from on-chain data if (and only if) one doesn't
-// already exist for this wallet+chain — INSERT IGNORE relies on the
-// unique_wallet_chain key (wallet_address, chain_name) to make this a
+// already exist for this wallet+chain+manager — INSERT IGNORE relies on the
+// unique_wallet_chain_manager key to make this a
 // no-op rather than an error when the normal client-side write already
 // succeeded (the overwhelmingly common case). email/traffic_source are
 // never recoverable this way (never submitted anywhere retrievable) — the

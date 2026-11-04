@@ -194,19 +194,22 @@ app.post("/api/subscribers", subscribeLimiter, async (req, res) => {
   const chainName = chainNameFor(chainId);
 
   let existing;
+  let walletRows = [];
   try {
     const [existingRows] = await pool.query(
-      "SELECT email, tx_hash FROM subscribers WHERE wallet_address = ? AND chain_name = ? LIMIT 1",
+      "SELECT email, tx_hash, manager_address FROM subscribers WHERE wallet_address = ? AND chain_name = ?",
       [walletAddress, chainName],
     );
-    existing = existingRows[0];
+    walletRows = existingRows;
+    // Rows are per (wallet, chain, manager): a wallet may hold a v1 and a v2 row.
+    existing = existingRows.find((r) => r.tx_hash === txHash) ?? existingRows.find((r) => r.email) ?? existingRows[0];
   } catch (err) {
     console.error("Failed to look up subscriber:", err.message);
     return res.status(500).json({ error: "database error" });
   }
   // This exact tx is already recorded — nothing new to learn from the chain,
   // so skip the RPC calls entirely (a retried/duplicated report costs nothing).
-  if (existing?.tx_hash === txHash) {
+  if (walletRows.some((r) => r.tx_hash === txHash)) {
     return res.json({ ok: true, alreadyRecorded: true });
   }
 
@@ -225,7 +228,10 @@ app.post("/api/subscribers", subscribeLimiter, async (req, res) => {
     // An existing email is only replaced by a fresh subscribe tx; otherwise
     // the stored one is kept (null => COALESCE keeps the column as-is).
     const canSetEmail = email && (!existing?.email || (fresh && chain.subscribed));
-    const emailToStore = canSetEmail ? email : null;
+    // Row of THIS manager (null when the wallet's first subscription on it): a
+    // new v2 row inherits the email already on file from the wallet's v1 row.
+    const sameManager = walletRows.find((r) => (r.manager_address ?? "").toLowerCase() === chain.managerAddress);
+    const emailToStore = canSetEmail ? email : !sameManager && existing?.email ? existing.email : null;
 
     await pool.query(
       `INSERT INTO subscribers
@@ -260,7 +266,7 @@ app.post("/api/subscribers", subscribeLimiter, async (req, res) => {
         chain.nextChargeAt,
         chain.activatedAt,
         chain.status,
-        chain.charged || !existing ? "success" : null,
+        chain.charged || !sameManager ? "success" : null,
         chain.campaign,
       ],
     );
@@ -305,7 +311,8 @@ app.get("/api/subscribers/by-wallet/:address", async (req, res) => {
     const [rows] = await pool.query(
       `SELECT chain_name, chain_id, manager_address, campaign, plan_id, plan_label, periods_paid, next_charge_at, status, tx_hash
        FROM subscribers
-       WHERE wallet_address = ?`,
+       WHERE wallet_address = ?
+       ORDER BY (status = 'active') DESC, activated_at DESC`,
       [walletAddress],
     );
     res.json({ rows });
