@@ -28,7 +28,14 @@ const iface = new Interface([
   "event Reactivated(address indexed user, uint256 nextChargeAt)",
   "event Cancelled(address indexed user)",
   "function subscriptions(address) view returns (uint256 planId, uint8 status, uint256 nextChargeAt, uint256 overdueSince, uint256 periodsPaid)",
+  // v2 only — reverts on a v1 manager (handled below).
+  "function promos(uint256) view returns (uint256 periods, uint256 successorId)",
 ]);
+
+// Name stored in subscribers.campaign for a plan that has a promo attached
+// on-chain (Promo.periods > 0). Today the only partner promo is Tokocrypto;
+// a second campaign needs its own mapping here (e.g. by plan id).
+const PROMO_CAMPAIGN = "tokocrypto";
 
 const STATUS_LABELS = ["inactive", "active", "overdue", "expired"];
 
@@ -72,7 +79,7 @@ async function getReceiptWithRetry(provider, txHash) {
 
 /**
  * @returns {Promise<{
- *   chainId: number, planId: number, status: string, periodsPaid: number,
+ *   chainId: number, managerAddress: string, campaign: string | null, planId: number, status: string, periodsPaid: number,
  *   nextChargeAt: number, activatedAt: number | null, blockTimestamp: number,
  *   subscribed: boolean, charged: boolean
  * }>}
@@ -98,6 +105,7 @@ async function verifySubscriptionTx({ chainId, txHash, address }) {
   const user = getAddress(address);
   let managerAddress = null;
   let subscribed = false;
+  let subscribedPlanId = null;
   let charged = false;
   let touched = false;
   for (const log of receipt.logs) {
@@ -111,7 +119,10 @@ async function verifySubscriptionTx({ chainId, txHash, address }) {
     if (!parsed || parsed.args.user !== user) continue;
     managerAddress = log.address;
     touched = true;
-    if (parsed.name === "Subscribed") subscribed = true;
+    if (parsed.name === "Subscribed") {
+      subscribed = true;
+      subscribedPlanId = parsed.args.planId;
+    }
     if (parsed.name === "Charged") charged = true;
   }
   if (!touched) throw new VerificationError("transaction has no SubscriptionManager event for this address");
@@ -127,9 +138,29 @@ async function verifySubscriptionTx({ chainId, txHash, address }) {
     throw new VerificationError(`RPC error while reading subscription: ${err.message}`, 502);
   }
 
+  // Campaign is only (re)decided by a tx that actually bought a plan: "" when
+  // it was a normal plan (clears an old campaign on a re-subscribe), null for
+  // renewals/other txs (leave the stored value alone). A v1 manager has no
+  // promos() — that call reverts, which simply means "not a promo".
+  let campaign = null;
+  if (subscribed) {
+    campaign = "";
+    try {
+      const raw = await provider.call({ to: managerAddress, data: iface.encodeFunctionData("promos", [subscribedPlanId]) });
+      const promo = iface.decodeFunctionResult("promos", raw);
+      if (promo.periods > 0n) campaign = PROMO_CAMPAIGN;
+    } catch (err) {
+      // A v1 manager reverts (CALL_EXCEPTION/BAD_DATA) = definitely not a promo.
+      // Anything else (RPC hiccup) = unknown: keep the stored value.
+      if (err?.code !== "CALL_EXCEPTION" && err?.code !== "BAD_DATA") campaign = null;
+    }
+  }
+
   const blockTimestamp = Number(block.timestamp);
   return {
     chainId,
+    managerAddress: managerAddress.toLowerCase(),
+    campaign,
     planId: Number(sub.planId),
     status: STATUS_LABELS[Number(sub.status)] ?? null,
     periodsPaid: Number(sub.periodsPaid),

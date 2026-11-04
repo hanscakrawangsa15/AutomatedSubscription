@@ -229,10 +229,12 @@ app.post("/api/subscribers", subscribeLimiter, async (req, res) => {
 
     await pool.query(
       `INSERT INTO subscribers
-         (wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, activated_at, status, last_renewal_result)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), FROM_UNIXTIME(?), ?, ?)
+         (wallet_address, chain_name, chain_id, manager_address, campaign, email, traffic_source, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, activated_at, status, last_renewal_result)
+       VALUES (?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), FROM_UNIXTIME(?), ?, ?)
        ON DUPLICATE KEY UPDATE
          chain_id = VALUES(chain_id),
+         manager_address = VALUES(manager_address),
+         campaign = IF(? IS NULL, campaign, VALUES(campaign)),
          email = COALESCE(NULLIF(VALUES(email), ''), email),
          traffic_source = COALESCE(NULLIF(VALUES(traffic_source), ''), traffic_source),
          plan_id = VALUES(plan_id),
@@ -247,6 +249,8 @@ app.post("/api/subscribers", subscribeLimiter, async (req, res) => {
         walletAddress,
         chainName,
         chainId,
+        chain.managerAddress,
+        chain.campaign,
         emailToStore,
         trafficSource || null,
         chain.planId,
@@ -257,6 +261,7 @@ app.post("/api/subscribers", subscribeLimiter, async (req, res) => {
         chain.activatedAt,
         chain.status,
         chain.charged || !existing ? "success" : null,
+        chain.campaign,
       ],
     );
     console.log(`Upserted subscriber ${walletAddress} on ${chainName} (plan ${chain.planId}, tx ${txHash})`);
@@ -298,7 +303,7 @@ app.get("/api/subscribers/by-wallet/:address", async (req, res) => {
   }
   try {
     const [rows] = await pool.query(
-      `SELECT chain_name, chain_id, plan_id, plan_label, periods_paid, next_charge_at, status, tx_hash
+      `SELECT chain_name, chain_id, manager_address, campaign, plan_id, plan_label, periods_paid, next_charge_at, status, tx_hash
        FROM subscribers
        WHERE wallet_address = ?`,
       [walletAddress],
@@ -401,6 +406,17 @@ app.get("/api/admin/me", (req, res) => {
   }
 });
 
+// Managers deployed with the v2 contract (lead-time billing + promo plans) are
+// the ones configured under an env suffix ending in _V2
+// (SUBSCRIPTION_MANAGER_ADDRESS_<chainId>[_TOKEN]_V2).
+function v2ManagerAddresses() {
+  const out = new Set();
+  for (const [key, value] of Object.entries(process.env)) {
+    if (/^SUBSCRIPTION_MANAGER_ADDRESS_\d+(?:_[A-Z0-9]+)*_V2$/.test(key) && value) out.add(value.toLowerCase());
+  }
+  return out;
+}
+
 const PAGE_SIZE_DEFAULT = 50;
 const PAGE_SIZE_MAX = 200;
 
@@ -413,6 +429,7 @@ const SORTABLE_COLUMNS = new Set([
   "chain_name",
   "email",
   "plan_label",
+  "campaign",
   "status",
   "periods_paid",
   "last_renewal_result",
@@ -438,7 +455,7 @@ app.get("/api/admin/subscribers", requireAdmin, async (req, res) => {
     // NULL first, which reads as "empty rows on top" rather than useful
     // sorting.
     const [rows] = await pool.query(
-      `SELECT wallet_address, chain_name, chain_id, email, traffic_source, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, activated_at, status, last_renewal_result
+      `SELECT wallet_address, chain_name, chain_id, manager_address, campaign, email, traffic_source, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, activated_at, status, last_renewal_result
        FROM subscribers ${where}
        ORDER BY ${sortBy} IS NULL, ${sortBy} ${sortDir}, wallet_address, chain_name
        LIMIT ? OFFSET ?`,
@@ -446,7 +463,16 @@ app.get("/api/admin/subscribers", requireAdmin, async (req, res) => {
     );
     const [countRows] = await pool.query(`SELECT COUNT(*) as total FROM subscribers ${where}`, searchParams);
 
-    res.json({ rows, total: countRows[0].total, page, pageSize });
+    // plan_id alone is ambiguous now that v1 and v2 managers both exist on a
+    // chain (each numbers its plans from #0), so label which generation a row
+    // belongs to. Rows written before manager_address existed are all v1.
+    const v2 = v2ManagerAddresses();
+    const withVersion = rows.map((r) => ({
+      ...r,
+      contract_version: r.manager_address && v2.has(r.manager_address.toLowerCase()) ? "v2" : "v1",
+    }));
+
+    res.json({ rows: withVersion, total: countRows[0].total, page, pageSize });
   } catch (err) {
     console.error("Failed to list subscribers:", err.message);
     res.status(500).json({ error: "database error" });

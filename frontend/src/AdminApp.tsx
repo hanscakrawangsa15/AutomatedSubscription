@@ -23,6 +23,12 @@ const EXPLORER_TX_BASE: Record<string, string> = {
   "base-mainnet": "https://basescan.org/tx/",
 };
 
+const EXPLORER_ADDRESS_BASE: Record<string, string> = {
+  "ethereum-mainnet": "https://etherscan.io/address/",
+  "bnb-mainnet": "https://bscscan.com/address/",
+  "base-mainnet": "https://basescan.org/address/",
+};
+
 function short(value: string, head = 6, tail = 4): string {
   return value.length > head + tail + 3 ? `${value.slice(0, head)}...${value.slice(-tail)}` : value;
 }
@@ -223,6 +229,8 @@ function SubscribersTable({ onLoggedOut }: { onLoggedOut: () => void }) {
                 <SortableHeader column="chain_name" label="Chain" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} />
                 <SortableHeader column="email" label="Email" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} />
                 <SortableHeader column="plan_label" label="Plan" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} />
+                <SortableHeader column="campaign" label="Campaign" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} />
+                <th title="Which SubscriptionManager contract generation this subscription lives on">Contract</th>
                 <SortableHeader column="status" label="Status" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} />
                 <SortableHeader column="periods_paid" label="Renewals" sortBy={sortBy} sortDir={sortDir} onSort={toggleSort} />
                 <SortableHeader
@@ -252,6 +260,26 @@ function SubscribersTable({ onLoggedOut }: { onLoggedOut: () => void }) {
                   <td>{r.email ?? "—"}</td>
                   <td>
                     {r.plan_label ?? "—"} {r.plan_id !== null ? `(#${r.plan_id})` : ""}
+                  </td>
+                  <td>
+                    {r.campaign ? (
+                      <span style={{ color: "#1a7f37", fontWeight: 600, textTransform: "capitalize" }} title="Bought on a partner discount plan">
+                        {r.campaign}
+                      </span>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td title={r.manager_address ?? "Legacy row (v1 manager)"}>
+                    {r.contract_version}
+                    {r.manager_address && EXPLORER_ADDRESS_BASE[r.chain_name] ? (
+                      <>
+                        {" "}
+                        <a href={`${EXPLORER_ADDRESS_BASE[r.chain_name]}${r.manager_address}`} target="_blank" rel="noreferrer">
+                          {short(r.manager_address)}
+                        </a>
+                      </>
+                    ) : null}
                   </td>
                   <td>{statusBadge(r.status)}</td>
                   <td title="Total successful charges, including the initial subscribe">

@@ -4,6 +4,12 @@ export type SubscriberRow = {
   wallet_address: string;
   chain_name: string;
   chain_id: number | null;
+  // Which SubscriptionManager this row belongs to. NULL on rows written before
+  // v2 existed (all v1); the server derives contract_version from it.
+  manager_address: string | null;
+  contract_version: "v1" | "v2";
+  // Partner campaign the plan was bought under (e.g. "tokocrypto"), else null.
+  campaign: string | null;
   email: string | null;
   traffic_source: string | null;
   plan_id: number | null;
@@ -66,6 +72,7 @@ export type SortableColumn =
   | "chain_name"
   | "email"
   | "plan_label"
+  | "campaign"
   | "status"
   | "periods_paid"
   | "last_renewal_result"

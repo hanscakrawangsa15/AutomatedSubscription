@@ -51,17 +51,26 @@ async function lookupSubscriberEmail(walletAddress, chainName) {
 // the row doesn't exist yet, which is fine — it's only ever expected to
 // already exist, written by server/index.js's /api/subscribers on the
 // initial subscribe.
+//
+// The table keeps ONE row per wallet+chain, but a chain can now have several
+// managers (v1 and v2). managerAddress stamps/guards the row: a row that
+// already belongs to a different manager is never overwritten by this
+// keeper, and a legacy row (manager_address NULL, written before v2) gets
+// stamped with this keeper's manager on its next update.
 async function updateRenewalInfo(
   walletAddress,
   chainName,
-  { periodsPaid, nextChargeAtSeconds, activatedAtSeconds, txHash, status, renewalResult },
+  { managerAddress, periodsPaid, nextChargeAtSeconds, activatedAtSeconds, txHash, status, renewalResult },
 ) {
+  const manager = managerAddress ? managerAddress.toLowerCase() : null;
   await getPool().query(
     `UPDATE subscribers
        SET periods_paid = ?, next_charge_at = FROM_UNIXTIME(?), activated_at = FROM_UNIXTIME(?),
-           tx_hash = COALESCE(?, tx_hash), status = ?, last_renewal_result = ?
-     WHERE wallet_address = ? AND chain_name = ?`,
-    [periodsPaid, nextChargeAtSeconds, activatedAtSeconds, txHash ?? null, status, renewalResult, walletAddress, chainName],
+           tx_hash = COALESCE(?, tx_hash), status = ?, last_renewal_result = ?,
+           manager_address = COALESCE(manager_address, ?)
+     WHERE wallet_address = ? AND chain_name = ?
+       AND (manager_address IS NULL OR ? IS NULL OR manager_address = ?)`,
+    [periodsPaid, nextChargeAtSeconds, activatedAtSeconds, txHash ?? null, status, renewalResult, manager, walletAddress, chainName, manager, manager],
   );
 }
 
@@ -76,16 +85,18 @@ async function updateRenewalInfo(
 async function reconcileMissingSubscriber(
   walletAddress,
   chainName,
-  { chainId, planId, planLabel, txHash, periodsPaid, nextChargeAtSeconds, activatedAtSeconds, status, renewalResult },
+  { chainId, managerAddress, campaign, planId, planLabel, txHash, periodsPaid, nextChargeAtSeconds, activatedAtSeconds, status, renewalResult },
 ) {
   const [result] = await getPool().query(
     `INSERT IGNORE INTO subscribers
-       (wallet_address, chain_name, chain_id, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, activated_at, status, last_renewal_result)
-     VALUES (?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), FROM_UNIXTIME(?), ?, ?)`,
+       (wallet_address, chain_name, chain_id, manager_address, campaign, plan_id, plan_label, tx_hash, periods_paid, next_charge_at, activated_at, status, last_renewal_result)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), FROM_UNIXTIME(?), ?, ?)`,
     [
       walletAddress,
       chainName,
       chainId,
+      managerAddress ? managerAddress.toLowerCase() : null,
+      campaign || null,
       planId,
       planLabel,
       txHash,

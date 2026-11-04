@@ -49,6 +49,8 @@ const MANAGER_ABI = [
   // v2 promo pricing: the price of the user's NEXT payment (differs from
   // plans(sub.planId).price once a promo runs out). Missing on a v1 manager.
   "function nextCharge(address user) view returns (uint256 planId, uint256 price)",
+  // v2: a plan with periods > 0 is a partner promo plan (see subscribersDb campaign). Missing on v1.
+  "function promos(uint256) view returns (uint256 periods, uint256 successorId)",
   "function chargeDue(address user)",
   "function expireOverdue(address user)",
   "event Subscribed(address indexed user, uint256 indexed planId, uint256 nextChargeAt)",
@@ -240,8 +242,21 @@ async function main() {
         const sub = await manager.subscriptions(user);
         const plan = await manager.plans(sub.planId);
         const block = await ev.getBlock();
+        // Campaign is only knowable from the plan this Subscribed event bought
+        // (a Reactivated event has no planId; a v1 manager has no promos()).
+        let campaign = null;
+        if (ev.args.planId !== undefined) {
+          try {
+            const promo = await manager.promos(ev.args.planId);
+            if (promo.periods > 0n) campaign = "tokocrypto";
+          } catch {
+            /* v1 manager: not a promo */
+          }
+        }
         const inserted = await reconcileMissingSubscriber(user.toLowerCase(), chainName, {
           chainId: Number(chainId),
+          managerAddress,
+          campaign,
           planId: Number(sub.planId),
           planLabel: planLabel(Number(plan.interval)),
           txHash: ev.transactionHash,
@@ -289,6 +304,7 @@ async function main() {
   // cleared or backdated by a non-event.
   const syncRenewalInfo = async (user, sub, renewalResult, activatedAtSeconds, txHash) => {
     await updateRenewalInfo(user.toLowerCase(), chainName, {
+      managerAddress,
       periodsPaid: Number(sub.periodsPaid),
       nextChargeAtSeconds: Number(sub.nextChargeAt),
       activatedAtSeconds: activatedAtSeconds ?? null,

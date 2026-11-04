@@ -4,4 +4,6 @@ import react from '@vitejs/plugin-react'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  // 5173 (Vite default) collides with the wallet extension's local port.
+  server: { port: 5180, strictPort: true },
 })

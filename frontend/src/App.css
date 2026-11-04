@@ -675,7 +675,10 @@ button.secondary:hover:not(:disabled) {
      yearly, 3 for monthly) — on a viewport too narrow to fit them at a
      readable width, scroll horizontally rather than wrapping to a new row. */
   overflow-x: auto;
-  padding-bottom: 4px;
+  /* Room for the hover lift + green glow, which overflow-x would otherwise clip. */
+  padding: 14px 12px 28px;
+  margin-left: -12px;
+  margin-right: -12px;
 }
 
 .pricing-card {
@@ -688,6 +691,23 @@ button.secondary:hover:not(:disabled) {
   padding: 24px 20px 20px;
   overflow: hidden;
   box-shadow: 0 2px 14px rgba(48, 37, 113, 0.06);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+/* Hover: every plan lifts and glows green, like the BEST DEAL card. */
+.pricing-card:hover {
+  transform: translateY(-6px);
+  border-color: var(--color-teal-end);
+  box-shadow: 0 0 0 1px rgba(46, 184, 140, 0.35), 0 12px 32px rgba(31, 122, 99, 0.2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pricing-card {
+    transition: none;
+  }
+  .pricing-card:hover {
+    transform: none;
+  }
 }
 
 .pricing-card--best-deal {
